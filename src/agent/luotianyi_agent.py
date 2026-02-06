@@ -14,7 +14,7 @@ import json
 import re
 
 from ..llm.prompt_manager import PromptManager
-from .main_chat import MainChat, OneSentenceChat, SongSegmentChat
+from .main_chat import MainChat, OneSentenceChat, SongSegmentChat, OneResponseLine
 from .planner import Planner
 from .conversation_manager import ConversationManager
 from ..utils.logger import get_logger
@@ -52,9 +52,10 @@ class LuoTianyiAgent:
         self.conversation_manager = ConversationManager(
             self.config.get("conversation_manager", {}), self.prompt_manager
         )  # 对话管理器
+        self.singing_manager = SingingManager(config={})  # 唱歌管理器
         memory_config = self.config.get("memory_manager", {})
         self.memory_manager = MemoryManager(memory_config, self.prompt_manager)  # 记忆管理器
-        self.singing_manager = SingingManager(config={})  # 唱歌管理器
+        self.memory_manager.memory_searcher.register_tools(self.singing_manager.get_tools())  # 注册唱歌工具
 
         self.tts_engine = tts_module  # TTS模块
 
@@ -64,8 +65,8 @@ class LuoTianyiAgent:
             available_tone=tts_module.get_available_tones(),
             available_expression=get_available_expression(),
         )
-        self.planner = Planner(config["planner"], self.prompt_manager)
-        self.planner.register_tools(self.singing_manager.get_tools())
+        self.planner = Planner(config["planner"], self.prompt_manager, self.singing_manager)
+
 
     async def handle_user_input(
         self,
@@ -74,7 +75,7 @@ class LuoTianyiAgent:
         db: Session,
         redis: redis.Redis,
         vector_store: Any = None,
-        knowledge_graph: Any = None,
+        knowledge_db: Session = None,
     ) -> AsyncGenerator[ChatResponse, None]:
         """
         处理用户输入，生成回复（流式）。
@@ -86,7 +87,7 @@ class LuoTianyiAgent:
             db: SQL数据库会话，用于持久化存储
             redis: Redis客户端，用于快速存取短期记忆/上下文
             vector_store: 向量数据库接口
-            knowledge_graph: 知识图谱接口
+            knowledge_db: Session = None,
 
         Yields:
             ChatResponse: 包含文本、表情、语音等信息的响应片段
@@ -103,7 +104,7 @@ class LuoTianyiAgent:
         username_task = asyncio.create_task(self.memory_manager.get_username(db, redis, user_id))
         knowledge_task = asyncio.create_task(
             self.memory_manager.get_knowledge(
-                db, redis, vector_store, knowledge_graph, user_id, text, context_data
+                db, redis, vector_store, knowledge_db, user_id, text, context_data
             )
         )
         user_nickname, retrieved_knowledge = await asyncio.gather(username_task, knowledge_task)
@@ -137,17 +138,44 @@ class LuoTianyiAgent:
             if resp.type == ContextType.SING:
                 # 处理唱歌片段
                 parameter: SongSegmentChat = resp.parameters
-                lrc_lines, sing_audio_bytes = self.singing_manager.get_song_segment(parameter.song, parameter.segment)
+                self.logger.info(f"Singing segment for {user_id}: {parameter.song} - {parameter.segment}")
+                lrc_lines, sing_audio_base64_str = self.singing_manager.get_song_segment(parameter.song, parameter.segment)
                 lrc = [line.content for line in lrc_lines]
                 sent_text = "（唱歌）：《" + parameter.song + "》\n" + "\n".join(lrc)
                 await self.conversation_manager.add_conversation(db, redis, user_id, ConversationSource.AGENT, sent_text, type=ContextType.SING)
+
+                total_length = len(sing_audio_base64_str) if sing_audio_base64_str else 0
+                self.logger.info(f"Audio base64 length: {total_length}")
+
+                # 将Base64字符串分块发送，以便客户端可以边接收边缓冲播放
+                chunk_size = 1024 * 1024  # 1MB per chunk
                 
-                response = ChatResponse(
-                    text=sent_text,
-                    expression="sing",
-                    audio=sing_audio_bytes
-                )
-                yield response
+                if total_length == 0:
+                    yield ChatResponse(
+                        text=sent_text,
+                        expression="唱歌",
+                        audio=""
+                    )
+                else:
+                    for i in range(0, total_length, chunk_size):
+                        chunk = sing_audio_base64_str[i:i + chunk_size]
+                        # 第一帧包含文本和表情，后续帧只包含音频数据
+                        if i == 0:
+                             yield ChatResponse(
+                                text=sent_text,
+                                expression="唱歌",
+                                audio=chunk,
+                                is_final_package=(i + chunk_size >= total_length)
+                            )
+                        else:
+                             yield ChatResponse(
+                                text="",  # 后续帧不重复发送文本
+                                expression=None,
+                                audio=chunk,
+                                is_final_package=(i + chunk_size >= total_length)
+                            )
+                        # 让出控制权，确保数据能及时通过网络栈发送出去，而不是堆积在缓冲区
+                        await asyncio.sleep(0)
 
             elif resp.type == ContextType.TEXT:
                 # 处理普通文本片段
@@ -160,8 +188,8 @@ class LuoTianyiAgent:
                
                     async def fake_tts():
                         return b""
-                    # tts_task = asyncio.create_task(self.tts_engine.synthesize_speech_with_tone(sent_content, tone))
-                    tts_task = asyncio.create_task(fake_tts())
+                    tts_task = asyncio.create_task(self.tts_engine.synthesize_speech_with_tone(sent_content, tone))
+                    # tts_task = asyncio.create_task(fake_tts())
                     db_task = asyncio.create_task(
                         self.conversation_manager.add_conversation(
                             db, redis, user_id, ConversationSource.AGENT, sent_content, type=ContextType.TEXT
@@ -174,7 +202,8 @@ class LuoTianyiAgent:
                     response = ChatResponse(
                         text=sent_content,
                         expression=expression,
-                        audio=audio_data_base64
+                        audio=audio_data_base64,
+                        is_final_package=True
                     )
 
                     yield response

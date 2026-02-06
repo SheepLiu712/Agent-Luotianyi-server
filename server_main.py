@@ -18,6 +18,7 @@ if current_dir not in sys.path:
 import src.database as database
 from src.service import account
 from src.service.types import (RegisterRequest, LoginRequest, AutoLoginRequest, ChatRequest, ChatResponse, HistoryRequest)
+from src.music.song_database import get_song_session, init_song_db
 from src.tts import TTSModule, init_tts_module
 from src.agent.luotianyi_agent import LuoTianyiAgent, init_luotianyi_agent, get_luotianyi_agent
 from src.utils.helpers import load_config
@@ -33,7 +34,8 @@ async def startup_event(app: FastAPI):
     # 数据库初始化
     database_config: Dict = config.get("database", {})
     database.init_all_databases(database_config)
-
+    song_db_config: Dict = config.get("knowledge", {}).get("song_database", {})
+    init_song_db(song_db_config)
     # TTS 模块初始化，启动TTS服务器进程
     tts_config = config.get("tts", {})
     tts_module: TTSModule = init_tts_module(tts_config)
@@ -134,7 +136,7 @@ async def chat(request: ChatRequest,
                db: Session = Depends(database.get_sql_db),
                redis: redis.Redis = Depends(database.get_redis_buffer),
                vector_store: database.VectorStore = Depends(database.get_vector_store),
-               knowledge_graph: database.KnowledgeGraph = Depends(database.get_knowledge_graph),
+               knowledge_db: Session = Depends(get_song_session),
                agent: LuoTianyiAgent = Depends(get_agent_service)):
     '''
     聊天接口，支持流式响应。用户发送消息，服务器返回分段的回复。
@@ -160,7 +162,7 @@ async def chat(request: ChatRequest,
             db=db,
             redis=redis,
             vector_store=vector_store,
-            knowledge_graph=knowledge_graph
+            knowledge_db=knowledge_db
         ):
             # 将 ChatResponse 对象序列化为 JSON
             data = response.model_dump_json() if hasattr(response, "model_dump_json") else response.json()

@@ -7,8 +7,8 @@ cwd = os.getcwd()
 if cwd not in sys.path:
     sys.path.append(cwd)
 
-from src.knowledge.song_database import init_song_db, get_song_session, Song
-from src.knowledge.knowledge_service import (
+from src.music.song_database import init_song_db, get_song_session, Song
+from src.music.knowledge_service import (
     get_song_introduction, 
     get_song_lyrics, 
     get_songs_by_uploader, 

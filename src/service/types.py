@@ -15,6 +15,7 @@ class ChatResponse(BaseModel):
     text: str
     audio: str | None = None
     expression: str | None = None
+    is_final_package: bool = True
 
 class LoginRequest(BaseModel):
     username: str

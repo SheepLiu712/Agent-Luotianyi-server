@@ -5,6 +5,7 @@ import json
 
 @dataclass
 class ToolOneParameter:
+    name: str
     type: str
     description: str
 
@@ -17,9 +18,9 @@ class ToolFunction:
 
     def to_dict(self) -> Dict:
         return {
-            "name": self.name,
+            "tool_name": self.name,
             "description": self.description,
-            "parameters": [{"type": param.type, "description": param.description} for param in self.parameters],
+            "parameters": [{"name": param.name, "type": param.type, "description": param.description} for param in self.parameters],
         }
 
 
@@ -33,3 +34,6 @@ class MyTool:
 
     def get_interface(self) -> Dict:
         return self.tool_interface.to_dict()
+    
+    def get_interface_str(self) -> str:
+        return json.dumps(self.get_interface(), ensure_ascii=False, indent=2)

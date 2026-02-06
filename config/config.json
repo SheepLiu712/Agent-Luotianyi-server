@@ -21,6 +21,13 @@
         }
     },
 
+    "knowledge": {
+        "song_database": {
+            "db_folder": "res/knowledge",
+            "db_file": "knowledge_db.db"
+        }
+    },
+
     "tts":{
         "character_name":"LuoTianyi",
         "onnx_model_dir":"res/tts/lty_custom_onnx_model",
@@ -56,7 +63,7 @@
         "llm_module": {
             "llm": {
                 "api_type": "siliconflow",
-                "model": "Qwen/Qwen3-Next-80B-A3B-Thinking",
+                "model": "Pro/deepseek-ai/DeepSeek-V3",
                 "api_key": "$SILICONFLOW_API_KEY",
                 "base_url": "https://api.siliconflow.cn/v1",
                 "temperature": 0.7,

@@ -10,10 +10,7 @@ class LLMModule:
         self.llm_client: LLMAPIInterface = LLMAPIFactory.create_interface(llm_config)
         self.prompt_template: PromptTemplate = prompt_manager.get_template(prompt_name)
 
-    async def generate_response(self, use_json: bool = False, tools=None, **kwargs) -> str:
+    async def generate_response(self, use_json: bool = False, **kwargs) -> str:
         prompt = self.prompt_template.render(**kwargs)
-        if tools:
-            response = await self.llm_client.generate_response_with_tools(prompt, tools, use_json=use_json)
-        else:
-            response = await self.llm_client.generate_response(prompt, use_json=use_json)
+        response = await self.llm_client.generate_response(prompt, use_json=use_json)
         return response 

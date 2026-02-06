@@ -140,7 +140,7 @@ class MemoryWriter:
         """
         doc = Document(content=document, metadata={"source": "memory_writer", "timestamp": time.strftime("%Y-%m-%d"), "user_id": user_id})
         ids = await asyncio.to_thread(vector_store.add_documents, [doc])
-        logger.debug(f"Successfully added document with UUIDs: {ids} for user {user_id}")
+        # logger.debug(f"Successfully added document with UUIDs: {ids} for user {user_id}")
         update_cmd = MemoryUpdateCommand(type="v_add", content=document, uuid=ids[0] if ids else None)
         recent_update.append(update_cmd)
         await asyncio.to_thread(write_memory_update, db, redis, user_id, update_cmd)

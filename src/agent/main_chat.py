@@ -5,7 +5,7 @@ from jinja2 import Template
 import time
 import dataclasses
 import json
-from .planner import PlanningStep
+from ..types.planner_type import PlanningStep, ReplyIntensity, SingingAction
 from ..utils.logger import get_logger
 from ..utils.enum_type import ContextType
 
@@ -32,12 +32,6 @@ class OneSentenceChat:
     content: str
     sound_content: str = ""
 
-you_should_dict = {
-    "闲聊回复": "简短地回复几句，保持对话的连续性和互动性。回复中不能包含'sing'类型的内容。",
-    "认真回复": "认真且详细地回复用户的最新对话内容。回复中不能包含'sing'类型的内容。",
-    "唱歌回复": "你需要在回复中包含'sing'类型的内容，唱歌给用户听。",
-}
-
 class MainChat:
     def __init__(
         self, config: Dict[str, Any], prompt_manager: PromptManager, available_tone: List[str], available_expression: List[str]
@@ -63,8 +57,7 @@ class MainChat:
         response_requirements = self.response_requirements
         response_format = self.response_format
 
-        action_desc = planning_step.description
-        action_str = action_desc + you_should_dict.get(planning_step.action, "回复中不能包含'sing'类型的内容。")
+        action_str = self.get_action_str(planning_step)
 
         # 调用异步的 LLM 生成接口
         response = await self.llm.generate_response(
@@ -99,7 +92,7 @@ class MainChat:
                 response_line = OneResponseLine(
                     type=ContextType.SING,
                     parameters=SongSegmentChat(
-                        song=item["parameters"].get("song", ""),
+                        song=item["parameters"].get("song_name", ""),
                         segment=item["parameters"].get("segment", ""),
                         
                     )
@@ -130,3 +123,20 @@ class MainChat:
 
         template = Template(response_format_raw)
         self.response_format = template.render(available_tone=available_tone, available_expression=available_expression)
+
+    def get_action_str(self, planning_step: PlanningStep) -> str:
+        chat_part = "轻松地以两三句话回复用户的最新对话内容。" if planning_step.reply_intensity == ReplyIntensity.NORMAL else "认真且详细地回复用户的最新对话内容，给予充分的情感支持。"
+
+        if planning_step.singing_action == SingingAction.NO_SINGING:
+            singing_part = "目前没有打算给用户唱歌。"
+        elif planning_step.singing_action == SingingAction.PROPOSE_SINGING:
+            if planning_step.singing_song:
+                singing_part = f"另外，询问用户是否想听歌曲《{planning_step.singing_song}》的片段。"
+            else:
+                singing_part = "另外，询问用户是否想听我唱歌。"
+        elif planning_step.singing_action == SingingAction.TRY_SINGING:
+            singing_part = f"另外，给用户唱《{planning_step.singing_song}》的选段：“{planning_step.singing_segment}”。它的歌词是：“{planning_step.singing_lyrics}”。"
+
+        action_str = f"{chat_part} {singing_part}"
+        print("Generated action string:", action_str)
+        return action_str

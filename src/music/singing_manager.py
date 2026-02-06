@@ -6,8 +6,8 @@ import io
 import base64
 import traceback
 from ..types.music_type import SongSegment, SongMetadata, OneLyricLine
-from ..types.tool_type import SiliconFlowTool, SiliconFlowFunction, SiliconFlowParameters, SiliconFlowOneParameter, MyTool
-from typing import List, Tuple, Dict
+from ..types.tool_type import  MyTool, ToolFunction, ToolOneParameter
+from typing import List, Tuple, Dict, Any
 
 
 class SingingManager:
@@ -84,29 +84,50 @@ class SingingManager:
             return None
         return self.all_songs.get(song_name, None)
 
-    def can_i_sing_song(self, song_name: str) -> str:
+    def can_i_sing_song(self, song_name: str) -> List[str]:
         """
         检查是否可以演唱指定歌曲，如果可以，返回能够唱的唱段列表，否则返回空列表
         """
         if not song_name:
-            return "没有指定歌曲名称。"
+            return []
         safe_song_name = song_name.strip("").strip("《》")
         if not safe_song_name in self.all_songs:
-            return "洛天依暂时不会唱这首歌。"
+            return []
         song_metadata: SongMetadata = self.all_songs[safe_song_name]
-        return f"{song_name}可以唱的选段：" + json.dumps(
-            [segment.description for segment in song_metadata.segments], ensure_ascii=False
-        )
+        return [segment.description for segment in song_metadata.segments]
 
-    def get_all_song(self) -> str:
+    def get_songs_can_sing(self, max_song_num: int = 5) -> Dict[str, Any]:
         song_and_desc = {}
-        for song_name, metadata in self.all_songs.items():
+        # shuffle and get max_song_num songs
+        import random
+        selected_songs = random.sample(list(self.all_songs.items()), min(max_song_num, len(self.all_songs)))
+        for song_name, metadata in selected_songs:
             song_and_desc[song_name] = metadata.description
 
         # to json string
+        return song_and_desc
+    
+    async def get_songs_can_sing_llm(self, max_song_num: int = 5) -> str:
+        song_and_desc = self.get_songs_can_sing(max_song_num)
         return json.dumps(song_and_desc, ensure_ascii=False)
+    
+    async def can_i_sing_song_llm(self, song_name: str) -> str:
+        if not song_name:
+            return "没有指定歌曲名称。"
+        segments = self.can_i_sing_song(song_name)
+        if not segments:
+            return f"洛天依目前无法演唱{song_name}。"
+        return f"洛天依可以演唱{song_name}，可以唱的唱段有：{', '.join(segments)}。"
+    
+    def get_segment_lyrics(self, song_name: str, segment_description: str) -> str:
+        lyrics, _ = self.get_song_segment(song_name, segment_description, require_audio=False)
+        if not lyrics:
+            return ""
+        # 拼接歌词内容
+        lyrics_content = " ".join([line.content for line in lyrics])
+        return lyrics_content
 
-    def get_song_segment(self, song_name: str, segment_description: str) -> Tuple[List[OneLyricLine], bytes]:
+    def get_song_segment(self, song_name: str, segment_description: str, require_audio: bool = True) -> Tuple[List[OneLyricLine], str]:
         """
         根据歌曲名称和唱段描述，获取对应唱段的歌词对象列表，并返回音频数据的base64编码
         """
@@ -130,6 +151,7 @@ class SingingManager:
         if not target_segment:
             self.logger.warning(f"Segment '{segment_description}' not found in song '{song_name}'")
             return None, None
+        
 
         # 转换 lyrics (如果是 dict 则转换为 OneLyricLine)
         real_lyrics = []
@@ -140,6 +162,9 @@ class SingingManager:
                     real_lyrics.append(OneLyricLine(duration=float(l.get("duration", 0.0)), content=str(l.get("content", ""))))
             elif isinstance(first_elem, OneLyricLine):
                 real_lyrics = target_segment.lyrics
+
+        if not require_audio:
+            return real_lyrics, None
 
         # 处理音频
         try:
@@ -174,7 +199,7 @@ class SingingManager:
             wav_bytes = wav_io.getvalue()
 
             # Base64 编码
-            b64_encoded = base64.b64encode(wav_bytes)
+            b64_encoded = base64.b64encode(wav_bytes).decode("utf-8")
 
             return real_lyrics, b64_encoded
 
@@ -183,40 +208,40 @@ class SingingManager:
             return None, None
 
     def init_llm_tools(self) -> None:
-        get_all_songs_tool = MyTool(
-            name="get_all_songs",
-            description="获取洛天依可以演唱的所有歌曲名称和描述。",
-            tool_func=self.get_all_song,
-            tool_interface=SiliconFlowTool(
-                type="function",
-                function=SiliconFlowFunction(
-                    name="get_all_songs",
-                    description="获取洛天依可以演唱的所有歌曲名称和简介",
-                    parameters=SiliconFlowParameters(type="object", properties={}, required=[]),
-                ),
+        get_songs_can_sing = MyTool(
+            name="get_songs_can_sing",
+            description="获取现在的洛天依可以演唱的几首歌曲名称和描述。",
+            tool_func=self.get_songs_can_sing_llm,
+            tool_interface= ToolFunction(
+                name="get_songs_can_sing",
+                description="获取现在的洛天依可以演唱的几首歌曲名称和描述。",
+                parameters=[
+                    ToolOneParameter(
+                        name="max_song_num",
+                        type="int",
+                        description="最多返回的歌曲数量",
+                    ),
+                ],
             ),
         )
 
         can_i_sing_tool = MyTool(
             name="can_i_sing_song",
             description="检查洛天依是否可以演唱指定的歌曲，如果可以，返回能够唱的唱段列表，否则返回空列表。",
-            tool_func=self.can_i_sing_song,
-            tool_interface=SiliconFlowTool(
-                type="function",
-                function=SiliconFlowFunction(
-                    name="can_i_sing_song",
-                    description="检查洛天依是否可以演唱指定的歌曲，如果可以，返回能够唱的唱段列表，否则返回空列表。",
-                    parameters=SiliconFlowParameters(
-                        type="object",
-                        properties={
-                            "song_name": SiliconFlowOneParameter(type="string", description="歌曲名称"),
-                        },
-                        required=["song_name"],
+            tool_func=self.can_i_sing_song_llm,
+            tool_interface=ToolFunction(
+                name="can_i_sing_song",
+                description="检查洛天依是否可以演唱指定的歌曲，如果可以，返回能够唱的唱段列表，否则返回空列表。",
+                parameters=[
+                    ToolOneParameter(
+                        name="song_name",
+                        type="string",
+                        description="歌曲名称",
                     ),
-                ),
+                ],
             ),
         )
-        self.tools[get_all_songs_tool.name] = get_all_songs_tool
+        self.tools[get_songs_can_sing.name] = get_songs_can_sing
         self.tools[can_i_sing_tool.name] = can_i_sing_tool
 
     def get_tool_names(self) -> List[str]:

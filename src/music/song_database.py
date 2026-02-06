@@ -3,6 +3,8 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 import uuid
 import os
 import json
+from typing import Dict, Generator
+from sqlalchemy.orm import Session
 
 Base = declarative_base()
 
@@ -20,9 +22,12 @@ class Song(Base):
 SessionLocal = None
 engine = None
 
-def init_song_db(db_folder: str = None, db_file: str = None):
+def init_song_db(config: Dict):
     """Initialize database tables"""
     global engine, SessionLocal
+
+    db_folder: str = config.get("db_folder", None)
+    db_file: str = config.get("db_file", None)
     
     # Ensure directory exists
     if not os.path.exists(db_folder):
@@ -48,7 +53,7 @@ def get_song_db():
     finally:
         db.close()
 
-def get_song_session():
+def get_song_session() -> Session:
     """Direct session"""
     if SessionLocal is None:
          # Fallback default path if not initialized explicitly
