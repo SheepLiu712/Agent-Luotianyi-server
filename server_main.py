@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Body, HTTPException, Depends, BackgroundTasks, File, UploadFile, Form
+from fastapi import FastAPI, Body, HTTPException, Depends, BackgroundTasks, File, Form
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 import uvicorn
@@ -17,7 +17,7 @@ if current_dir not in sys.path:
     
 import src.database as database
 from src.service import account
-from src.service.types import (RegisterRequest, LoginRequest, AutoLoginRequest, ChatRequest, ChatResponse, HistoryRequest)
+from src.service.types import (RegisterRequest, LoginRequest, AutoLoginRequest, ChatRequest, ChatResponse, HistoryRequest, PictureChatRequest, ImageRequest)
 from src.music.song_database import get_song_session, init_song_db
 from src.tts import TTSModule, init_tts_module
 from src.agent.luotianyi_agent import LuoTianyiAgent, init_luotianyi_agent, get_luotianyi_agent
@@ -170,29 +170,41 @@ async def chat(request: ChatRequest,
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
-
 @app.post("/picture_chat")
 async def picture_chat(
-    username: str = Form(...),
-    token: str = Form(...),
-    image: UploadFile = File(...),
-    db: Session = Depends(database.get_sql_db)
+    request: PictureChatRequest = Depends(),
+    db: Session = Depends(database.get_sql_db),
+    redis: redis.Redis = Depends(database.get_redis_buffer),
+    vector_store: database.VectorStore = Depends(database.get_vector_store),
+    knowledge_db: Session = Depends(get_song_session),
+    agent: LuoTianyiAgent = Depends(get_agent_service)
 ):
     '''
     图片聊天接口，支持流式响应。用户发送图片和认证信息，服务器返回回复。
     目前仅为占位符，不处理图片内容。
     '''
-    logger.info(f"Server received picture from {username}")
-    message_token_valid, user_uuid = account.check_message_token(db, username, token)
+    logger.info(f"Server received picture from {request.username}")
+    message_token_valid, user_uuid = account.check_message_token(db, request.username, request.token)
     if not message_token_valid:
         raise HTTPException(status_code=401, detail="消息令牌无效或已过期")
     
     # 定义异步生成器用于流式响应
     async def event_generator():
-        # 模拟响应
-        response = ChatResponse(text="收到图片了，但我目前还无法处理图片内容。")
-        data = response.model_dump_json() if hasattr(response, "model_dump_json") else response.json()
-        yield f"data: {data}\n\n"
+        # 读取图片数据
+        image_bytes = await request.image.read()
+        
+        # 调用 Agent 的图片处理方法
+        async for response in agent.handle_user_pic_input(
+            user_id=user_uuid,
+            image=request.image,
+            image_client_path=request.image_client_path,
+            db=db,
+            redis=redis,
+            vector_store=vector_store,
+            knowledge_db=knowledge_db
+        ):
+            data = response.model_dump_json() if hasattr(response, "model_dump_json") else response.json()
+            yield f"data: {data}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
@@ -208,6 +220,46 @@ async def get_history(
     if not message_token_valid:
         raise HTTPException(status_code=401, detail="消息令牌无效或已过期")
     return await agent.handle_history_request(user_uuid, request.count, request.end_index, db)
+
+@app.post("/get_image")
+async def get_image(request: ImageRequest):
+    '''
+    获取图片接口。用户提供图片的服务器路径，服务器返回图片二进制数据。
+
+    请求参数：
+    - request.username: 用户名
+    - request.token: 认证 token
+    - request.image_server_path: 图片在服务器上的存储路径
+    返回值：
+    - 成功：图片的二进制数据，Content-Type 根据图片类型设置
+    - 失败：HTTP 400 错误，{"detail": "获取图片失败，失败原因"}
+    '''
+    logger.info(f"Get image request from {request.username} for {request.image_server_path}")
+    message_token_valid, user_uuid = account.check_message_token(database.get_sql_db(), request.username, request.token)
+    if not message_token_valid:
+        raise HTTPException(status_code=401, detail="消息令牌无效或已过期")
+        
+    if not os.path.isfile(request.image_server_path):
+        raise HTTPException(status_code=400, detail="获取图片失败，文件不存在")
+    
+    # 读取图片二进制数据
+    try:
+        with open(request.image_server_path, "rb") as f:
+            image_data = f.read()
+        
+        # 根据文件扩展名设置 Content-Type
+        ext = os.path.splitext(request.image_server_path)[1].lower()
+        content_type = "image/png"
+        if ext in [".jpg", ".jpeg"]:
+            content_type = "image/jpeg"
+        elif ext == ".gif":
+            content_type = "image/gif"
+        
+        return StreamingResponse(iter([image_data]), media_type=content_type)
+    except Exception as e:
+        logger.error(f"Error reading image file: {e}")
+        raise HTTPException(status_code=400, detail="获取图片失败，读取文件出错")
+
 if __name__ == "__main__":
     # uvicorn.run(app, host="0.0.0.0", port=60030)
     uvicorn.run(app, host="127.0.0.1", port=60030)

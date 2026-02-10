@@ -11,7 +11,9 @@ from sqlalchemy.orm import Session
 import redis
 import asyncio
 import json
+from fastapi import UploadFile
 import re
+import base64
 
 from ..llm.prompt_manager import PromptManager
 from .main_chat import MainChat, OneSentenceChat, SongSegmentChat, OneResponseLine
@@ -23,6 +25,7 @@ from ..utils.enum_type import ContextType, ConversationSource
 from ..memory.memory_manager import MemoryManager
 from ..service.types import ChatResponse
 from ..music.singing_manager import SingingManager
+from ..vision.vision_module import VisionModule
 
 
 def get_available_expression(config_path: str = "config/live2d_interface_config.json") -> List[str]:
@@ -66,9 +69,55 @@ class LuoTianyiAgent:
             available_expression=get_available_expression(),
         )
         self.planner = Planner(config["planner"], self.prompt_manager, self.singing_manager)
+        self.vision_module = VisionModule(config["vision_module"], self.prompt_manager)
+ 
+    async def handle_user_text_input(
+        self,
+        user_id: str,
+        text: str,
+        db: Session,
+        redis: redis.Redis,
+        vector_store: Any = None,
+        knowledge_db: Session = None,
+    ) -> AsyncGenerator[ChatResponse, None]:
+        """处理用户文本输入，生成回复（流式）。"""
+        self.logger.info(f"Agent handling text input for {user_id}: {text}")
+        await self.conversation_manager.add_conversation(
+            db, redis, user_id, ConversationSource.USER, text, type=ContextType.TEXT, data=None
+        )
+        async for response in self.shared_process_pipeline(user_id, text, db, redis, vector_store, knowledge_db):
+            yield response
 
 
-    async def handle_user_input(
+    async def handle_user_pic_input(
+        self,
+        user_id: str,
+        image: UploadFile,
+        image_client_path: str,
+        db: Session,
+        redis: redis.Redis,
+        vector_store: Any,
+        knowledge_db: Session,
+    ) -> AsyncGenerator[ChatResponse, None]:
+        """处理用户图片输入，生成回复（流式）。"""
+        self.logger.info(f"Agent handling picture input for {user_id}")
+        # 将图片通过vlm模块转换为描述文本
+        image_bytes = await image.read()
+        image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+        image_description = await self.vision_module.describe_image(image_base64)  # TODO: 实现视觉模块
+        await self.conversation_manager.add_conversation(
+            db,
+            redis,
+            user_id,
+            ConversationSource.USER,
+            content=image_description,
+            type=ContextType.PICTURE,
+            data={"image_client_path": image_client_path, "image_bytes": image_bytes},
+        )
+        async for response in self.shared_process_pipeline(user_id, image_description, db, redis, vector_store, knowledge_db):
+            yield response
+
+    async def shared_process_pipeline(
         self,
         user_id: str,
         text: str,
@@ -92,20 +141,13 @@ class LuoTianyiAgent:
         Yields:
             ChatResponse: 包含文本、表情、语音等信息的响应片段
         """
-
-        self.logger.info(f"Agent handling input for {user_id}: {text}")
-        await self.conversation_manager.add_conversation(
-            db, redis, user_id, ConversationSource.USER, text, type=ContextType.TEXT
-        )
         # 1. 获取上下文 (Cache Aside 模式：优先查Redis，未命中则查DB并回写)
         context_data = await self.conversation_manager.get_context(db, redis, user_id)
 
         # 2. 记忆与知识检索 (并发执行，避免阻塞)
         username_task = asyncio.create_task(self.memory_manager.get_username(db, redis, user_id))
         knowledge_task = asyncio.create_task(
-            self.memory_manager.get_knowledge(
-                db, redis, vector_store, knowledge_db, user_id, text, context_data
-            )
+            self.memory_manager.get_knowledge(db, redis, vector_store, knowledge_db, user_id, text, context_data)
         )
         user_nickname, retrieved_knowledge = await asyncio.gather(username_task, knowledge_task)
 
@@ -116,7 +158,11 @@ class LuoTianyiAgent:
         )
         # 3b. 根据行动计划调用主聊天模块生成回复
         llm_responses = await self.main_chat.generate_response(
-            user_input=text, conversation_history=context_data, retrieved_knowledge=retrieved_knowledge, username=user_nickname, planning_step=planning_step
+            user_input=text,
+            conversation_history=context_data,
+            retrieved_knowledge=retrieved_knowledge,
+            username=user_nickname,
+            planning_step=planning_step,
         )
 
         # 4. 记忆写入（异步）
@@ -142,37 +188,32 @@ class LuoTianyiAgent:
                 lrc_lines, sing_audio_base64_str = self.singing_manager.get_song_segment(parameter.song, parameter.segment)
                 lrc = [line.content for line in lrc_lines]
                 sent_text = "（唱歌）：《" + parameter.song + "》\n" + "\n".join(lrc)
-                await self.conversation_manager.add_conversation(db, redis, user_id, ConversationSource.AGENT, sent_text, type=ContextType.SING)
+                await self.conversation_manager.add_conversation(
+                    db, redis, user_id, ConversationSource.AGENT, sent_text, type=ContextType.SING
+                )
 
                 total_length = len(sing_audio_base64_str) if sing_audio_base64_str else 0
                 self.logger.info(f"Audio base64 length: {total_length}")
 
                 # 将Base64字符串分块发送，以便客户端可以边接收边缓冲播放
                 chunk_size = 1024 * 1024  # 1MB per chunk
-                
+
                 if total_length == 0:
-                    yield ChatResponse(
-                        text=sent_text,
-                        expression="唱歌",
-                        audio=""
-                    )
+                    yield ChatResponse(text=sent_text, expression="唱歌", audio="")
                 else:
                     for i in range(0, total_length, chunk_size):
-                        chunk = sing_audio_base64_str[i:i + chunk_size]
+                        chunk = sing_audio_base64_str[i : i + chunk_size]
                         # 第一帧包含文本和表情，后续帧只包含音频数据
                         if i == 0:
-                             yield ChatResponse(
-                                text=sent_text,
-                                expression="唱歌",
-                                audio=chunk,
-                                is_final_package=(i + chunk_size >= total_length)
+                            yield ChatResponse(
+                                text=sent_text, expression="唱歌", audio=chunk, is_final_package=(i + chunk_size >= total_length)
                             )
                         else:
-                             yield ChatResponse(
+                            yield ChatResponse(
                                 text="",  # 后续帧不重复发送文本
                                 expression=None,
                                 audio=chunk,
-                                is_final_package=(i + chunk_size >= total_length)
+                                is_final_package=(i + chunk_size >= total_length),
                             )
                         # 让出控制权，确保数据能及时通过网络栈发送出去，而不是堆积在缓冲区
                         await asyncio.sleep(0)
@@ -185,9 +226,10 @@ class LuoTianyiAgent:
                     sent_content = split_resp.content
                     expression = split_resp.expression
                     tone = split_resp.tone if split_resp.tone else "normal"
-               
+
                     async def fake_tts():
                         return b""
+
                     tts_task = asyncio.create_task(self.tts_engine.synthesize_speech_with_tone(sent_content, tone))
                     # tts_task = asyncio.create_task(fake_tts())
                     db_task = asyncio.create_task(
@@ -195,15 +237,12 @@ class LuoTianyiAgent:
                             db, redis, user_id, ConversationSource.AGENT, sent_content, type=ContextType.TEXT
                         )
                     )
-                
+
                     audio_wav_bytes, _ = await asyncio.gather(tts_task, db_task)
                     audio_data_base64 = self.tts_engine.encode_audio_to_base64(audio_wav_bytes)
 
                     response = ChatResponse(
-                        text=sent_content,
-                        expression=expression,
-                        audio=audio_data_base64,
-                        is_final_package=True
+                        text=sent_content, expression=expression, audio=audio_data_base64, is_final_package=True
                     )
 
                     yield response
@@ -222,20 +261,23 @@ class LuoTianyiAgent:
         Returns:
             拆分后的响应列表
         """
+
         def clean_sound_content(text: str) -> str:
             # Remove content within parentheses (Chinese and English)
-            return re.sub(r'（.*?）|\(.*?\)', '', text)
-        punct_pattern = re.compile(r'^(?:\.{3}|[。，！？~,])+$')
-        
+            return re.sub(r"（.*?）|\(.*?\)", "", text)
+
+        punct_pattern = re.compile(r"^(?:\.{3}|[。，！？~,])+$")
+
         split_responses: List[OneSentenceChat] = []
         for resp in responses:
             # 使用捕获组 () 保留分隔符
-            parts = re.split(r'((?:\.{3}|[。，！？~,]))', resp.content)
+            parts = re.split(r"((?:\.{3}|[。，！？~,]))", resp.content)
 
             # 获取带标点符号的各个句子
             sentences_with_punct = []
             for s in parts:
-                if not s: continue
+                if not s:
+                    continue
                 if punct_pattern.match(s) and sentences_with_punct:
                     sentences_with_punct[-1] += s
                 else:
@@ -246,11 +288,11 @@ class LuoTianyiAgent:
 
             for i, sentence in enumerate(sentences_with_punct):
                 # check if sentence starts with parenthesis (action/mood)
-                match = re.match(r'^(\（.*?\）|\(.*?\))', sentence)
+                match = re.match(r"^(\（.*?\）|\(.*?\))", sentence)
                 paren_content = None
                 if match:
                     paren_content = match.group(1)
-                    sentence = sentence[len(paren_content):] # remove from current sentence
+                    sentence = sentence[len(paren_content) :]  # remove from current sentence
 
                 if paren_content:
                     # assign to previous sentence
@@ -264,9 +306,9 @@ class LuoTianyiAgent:
                     else:
                         # no previous sentence, keep it at start
                         sentence = paren_content + sentence
-                
+
                 sentence_buffer += sentence
-                
+
                 # Standard flush condition
                 if len(sentence_buffer) >= 6 or i == len(sentences_with_punct) - 1:
                     if sentence_buffer.strip():
@@ -276,7 +318,7 @@ class LuoTianyiAgent:
                                 content=final_content,
                                 expression=resp.expression,
                                 tone=resp.tone,
-                                sound_content=clean_sound_content(final_content)
+                                sound_content=clean_sound_content(final_content),
                             )
                         )
                         sentence_buffer = ""
@@ -310,8 +352,16 @@ class LuoTianyiAgent:
         ret = {"history": [], "start_index": 0}
 
         for item in history_items:
+            if item.type == ContextType.PICTURE and item.data:
+                # 图片消息，返回图片路径
+                image_client_path = item.data.get("image_client_path")
+                image_server_path = item.data.get("image_server_path")
+                content = {"image_client_path": image_client_path, "image_server_path": image_server_path}
+                content = json.dumps(content)  # 转换为字符串格式，前端解析后使用
+            else:
+                content = item.content
             ret["history"].append(
-                {"content": item.content, "source": item.source, "timestamp": item.timestamp, "type": item.type}
+                {"content": content, "source": item.source, "timestamp": item.timestamp, "type": item.type}
             )
 
         return ret

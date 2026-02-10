@@ -31,3 +31,22 @@ class AutoLoginRequest(BaseModel):
     username: str
     token: str
 
+from fastapi import Form, File, UploadFile
+class PictureChatRequest:
+    def __init__(
+        self,
+        username: str = Form(...),
+        token: str = Form(...),
+        image: UploadFile = File(...),
+        image_client_path: str = Form(None)
+    ):
+        self.username = username
+        self.token = token
+        self.image = image
+        self.image_client_path = image_client_path
+
+
+class ImageRequest(BaseModel):
+    username: str
+    token: str
+    image_server_path: str

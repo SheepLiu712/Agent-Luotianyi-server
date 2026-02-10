@@ -34,8 +34,10 @@ def timestamp_to_elapsed_time(timestamp: str) -> str:
 class ConversationItem:
     timestamp: str
     source: str
-    type: str
+    type: str # 'text' | 'audio' | 'picture'
     content: str
+    data: Any = None # Optional binary data or extra payload (e.g. image bytes/base64)
+    
     def __repr__(self) -> str:
         elapsed_time: str = self._timestamp_to_elapsed_time()
         return f"[{elapsed_time}] {self.source} ({self.type}): {self.content}"

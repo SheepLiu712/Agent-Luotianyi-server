@@ -1,10 +1,11 @@
 from enum import Enum
 
 class ContextType(str, Enum):
-    TEXT = "text",
+    TEXT = "text"
     SING = "sing"
-    CMD = "cmd",
-    PIC = "pic",
+    CMD = "cmd"
+    PICTURE = "picture"
+
 
 class ConversationSource(str, Enum):
     USER = "user",

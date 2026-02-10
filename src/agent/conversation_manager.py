@@ -33,7 +33,7 @@ class ConversationManager:
         self.recent_limit = self.config.get("recent_history_limit", 100)
 
     async def add_conversation(self, db: Session, redis: Redis, user_id: str, 
-                             source: ConversationSource, content: str, type: ContextType = ContextType.TEXT):
+                             source: ConversationSource, content: str, type: ContextType = ContextType.TEXT, data: Any = None):
         """
         添加对话到数据库，并检查是否需要更新上下文摘要
         """
@@ -42,7 +42,8 @@ class ConversationManager:
             timestamp=timestamp,
             source=source.value,
             type=type.value,
-            content=content
+            content=content,
+            data=data
         )
         
         # 1. 写入数据库并更新 Redis Buffer

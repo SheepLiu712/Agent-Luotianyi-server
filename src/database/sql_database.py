@@ -48,6 +48,7 @@ class Conversation(Base):
     source = Column(String, nullable=False) # 'user' or 'agent'
     type = Column(String, nullable=False) # 'text' or 'audio'
     content = Column(Text, nullable=False)
+    meta_data = Column(Text, nullable=True)
     
     user = relationship("User", back_populates="conversations")
 
@@ -56,7 +57,9 @@ class MemoryRecord(Base):
     
     uuid = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id = Column(String, ForeignKey("users.uuid"), nullable=False)
+    type = Column(String, default="text")
     content = Column(Text, nullable=False)
+    meta_data = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.now)
 
     user = relationship("User", back_populates="memory_records")

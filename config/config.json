@@ -74,6 +74,20 @@
         },
         "static_variables_file": "res/agent/persona/static_variables.json"        
     },
+    "vision_module":{
+        "vlm_module": {
+            "vlm": {
+                "api_type": "siliconflow",
+                "model": "Qwen/Qwen3-VL-30B-A3B-Instruct",
+                "api_key": "$SILICONFLOW_API_KEY",
+                "base_url": "https://api.siliconflow.cn/v1",
+                "temperature": 0.7,
+                "max_tokens": 16384,
+                "top_p": 0.9
+            },
+            "prompt_name": "vision_interaction_prompt"
+        }
+    },
 
     "conversation_manager": {
         "history_dir": "data/memory/conversation_history",

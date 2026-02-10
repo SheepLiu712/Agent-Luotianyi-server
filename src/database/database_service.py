@@ -5,6 +5,8 @@ from .sql_database import User, KnowledgeBuffer, Conversation, Base, MemoryRecor
 from .redis_buffer import init_redis_buffer, get_redis_buffer
 from .knowledge_graph import KnowledgeGraph, init_knowledge_graph, get_knowledge_graph
 from redis import Redis
+import os
+import base64
 
 import json
 from typing import Dict, Any, Optional, List
@@ -166,20 +168,49 @@ def add_conversations(db: Session, redis: Redis, user_id: str, conversation_data
                 ts = datetime.strptime(item.timestamp, "%Y-%m-%d %H:%M:%S")
             except ValueError:
                 ts = datetime.now()
-                
+            
+            meta_data_str = None
+            if item.type == 'picture' and item.data:
+                # Save picture data to file system
+                try:
+                    # data/<user_uuid>/<timestamp>.<postfix>
+                    save_dir = os.path.join("data", user_id)
+                    os.makedirs(save_dir, exist_ok=True)
+                    
+                    # File name handling (replace invalid chars for windows/linux)
+                    safe_time = item.timestamp.replace(":", "-").replace(" ", "_")
+                    image_client_path = item.data.get("image_client_path", "image.png")
+                    postfix = os.path.splitext(image_client_path)[1] or ".png"
+                    file_path = os.path.join(save_dir, f"{safe_time}.{postfix}")
+                    
+                    # Write image data
+                    image_bytes = item.data.get("image_bytes")
+                    if not isinstance(image_bytes, bytes):
+                        raise ValueError("image_bytes must be bytes")
+
+                    with open(file_path, "wb") as f:
+                        f.write(image_bytes)
+
+                    # Store file path in meta_data as JSON
+                    meta_data_str = json.dumps({"image_server_path": file_path, "image_client_path": image_client_path}, ensure_ascii=False)
+                except Exception as e:
+                    logger.error(f"Failed to save picture for user {user_id}: {e}")
+
             conv = Conversation(
                 user_id=user_id,
                 timestamp=ts,
                 source=item.source,
                 content=item.content,
-                type=item.type
+                type=item.type,
+                meta_data=meta_data_str
             )
             db.add(conv)
             new_convs.append({
                 "timestamp": item.timestamp,
                 "source": item.source,
                 "content": item.content,
-                "type": item.type
+                "type": item.type,
+                "meta_data": meta_data_str
             })
         
         user.all_memory_count = (user.all_memory_count or 0) + len(conversation_data)
