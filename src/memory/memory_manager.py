@@ -13,6 +13,7 @@ from redis import Redis
 from ..utils.logger import get_logger
 from .memory_search import MemorySearcher
 from .memory_write import MemoryWriter
+from ..music.singing_manager import SingingManager
 from .graph_retriever import GraphRetrieverFactory, GraphRetriever
 from ..llm.prompt_manager import PromptManager
 from ..database import VectorStore, KnowledgeGraph
@@ -23,6 +24,7 @@ class MemoryManager:
         self,
         config: Dict[str, Any],
         prompt_manager: PromptManager,
+        singing_manager: SingingManager,
     ):
         """
         初始化记忆管理器
@@ -37,7 +39,7 @@ class MemoryManager:
         self.graph_retriever: GraphRetriever = GraphRetrieverFactory.create_retriever(
             config["graph_retriever"]["retriever_type"], config["graph_retriever"]
         )
-        self.memory_searcher = MemorySearcher(config["memory_searcher"], prompt_manager)
+        self.memory_searcher = MemorySearcher(config["memory_searcher"], prompt_manager, singing_manager)
         self.memory_writer = MemoryWriter(config["memory_writer"], prompt_manager)
 
     async def get_knowledge(

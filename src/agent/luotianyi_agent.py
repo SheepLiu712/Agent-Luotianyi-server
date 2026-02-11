@@ -57,7 +57,7 @@ class LuoTianyiAgent:
         )  # 对话管理器
         self.singing_manager = SingingManager(config={})  # 唱歌管理器
         memory_config = self.config.get("memory_manager", {})
-        self.memory_manager = MemoryManager(memory_config, self.prompt_manager)  # 记忆管理器
+        self.memory_manager = MemoryManager(memory_config, self.prompt_manager, self.singing_manager)  # 记忆管理器
         self.memory_manager.memory_searcher.register_tools(self.singing_manager.get_tools())  # 注册唱歌工具
 
         self.tts_engine = tts_module  # TTS模块

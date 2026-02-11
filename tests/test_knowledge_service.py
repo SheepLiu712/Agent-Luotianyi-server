@@ -26,7 +26,11 @@ class TestKnowledgeService(unittest.TestCase):
         project_root = os.getcwd()
         db_folder = os.path.join(project_root, "res", "knowledge")
         db_file = "knowledge_db.db"
-        init_song_db(db_folder, db_file)
+        config = {
+            "db_folder": db_folder,
+            "db_file": db_file
+        }
+        init_song_db(config)
         cls.db = get_song_session()
 
     @classmethod
@@ -35,9 +39,9 @@ class TestKnowledgeService(unittest.TestCase):
 
     def test_get_song_introduction(self):
         print("\n=== Test Get Song Introduction ===")
-        # 测试《千年食谱颂》
-        intro = get_song_introduction(self.db, "千年食谱颂")
-        print(f"Song: 千年食谱颂\nIntro Preview: {intro[:50] if intro else 'None'}...")
+        # 测试《纯蓝》
+        intro = get_song_introduction(self.db, "纯蓝")
+        print(f"Song: 纯蓝\nIntro Preview: {intro[:50] if intro else 'None'}...")
         self.assertIsNotNone(intro)
         self.assertIn("H.K.君", intro) # 假设summary里提到了作者
 
@@ -48,8 +52,8 @@ class TestKnowledgeService(unittest.TestCase):
 
     def test_get_song_lyrics(self):
         print("\n=== Test Get Song Lyrics ===")
-        lyrics = get_song_lyrics(self.db, "千年食谱颂")
-        print(f"Song: 千年食谱颂\nLyrics Preview: {lyrics[:600] if lyrics else 'None'}...")
+        lyrics = get_song_lyrics(self.db, "纯蓝")
+        print(f"Song: 纯蓝\nLyrics Preview: {lyrics[:600] if lyrics else 'None'}...")
         self.assertIsNotNone(lyrics)
         
         lyrics2 = get_song_lyrics(self.db, "光与影的对白")
@@ -58,15 +62,15 @@ class TestKnowledgeService(unittest.TestCase):
 
     def test_get_songs_by_uploader(self):
         print("\n=== Test Get Songs By Uploader ===")
-        # 查找《千年食谱颂》的UP主
-        info = get_song_info(self.db, "千年食谱颂")
+        # 查找《纯蓝》的UP主
+        info = get_song_info(self.db, "纯蓝")
         uploader = info.get("uploader")
-        print(f"Uploader of 千年食谱颂: {uploader}")
+        print(f"Uploader of 纯蓝: {uploader}")
         
         if uploader:
             songs = get_songs_by_uploader(self.db, uploader)
             print(f"Songs by {uploader}: {songs[:5]}")
-            self.assertIn("千年食谱颂", songs)
+            self.assertIn("纯蓝", songs)
 
     def test_get_random_songs_by_singer(self):
         print("\n=== Test Get Random Songs By Singer ===")

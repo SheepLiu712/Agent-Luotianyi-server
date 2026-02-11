@@ -156,7 +156,7 @@ async def chat(request: ChatRequest,
     # 定义异步生成器用于流式响应
     async def event_generator():
         # 调用 Agent 的无状态处理方法
-        async for response in agent.handle_user_input(
+        async for response in agent.handle_user_text_input(
             user_id=user_uuid,
             text=request.text,
             db=db,

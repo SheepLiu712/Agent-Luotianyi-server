@@ -95,6 +95,7 @@ def prefill_buffer(db: Session, redis: Redis, user_id: str, types: List[str] = [
                 db.query(KnowledgeBuffer).filter(KnowledgeBuffer.user_id == user_id).order_by(KnowledgeBuffer.uuid.asc()).all()
             )
             knowledge_contents = [kb.content for kb in knowledge_buffers]
+            print(knowledge_contents)
             knowledge_key = f"user_knowledge:{user_id}"
             redis.setex(knowledge_key, 3600, json.dumps(knowledge_contents, ensure_ascii=False))  # 1小时过期
             logger.info(f"Prefilled knowledge buffer for user {user_id} in Redis.")

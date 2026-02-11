@@ -6,7 +6,7 @@ Memory Search Module
 """
 
 from ..utils.logger import get_logger
-from ..music.knowledge_service import get_song_introduction, get_song_lyrics
+from ..music.knowledge_service import get_song_introduction, get_song_lyrics, search_songs_by_lyrics
 from ..llm.prompt_manager import PromptManager
 from ..llm.llm_module import LLMModule
 from typing import Tuple, Dict, List, Any
@@ -15,6 +15,9 @@ from ..types.tool_type import MyTool, ToolFunction, ToolOneParameter
 from ..database.database_service import get_knowledge_from_buffer, VectorStore, KnowledgeGraph, write_knowledge_buffers, write_used_memory_uuid
 import asyncio 
 import json
+import re
+import random
+from ..music.singing_manager import SingingManager
 
 from sqlalchemy.orm import Session
 from redis import Redis
@@ -22,12 +25,14 @@ from redis import Redis
 
 
 class MemorySearcher:
-    def __init__(self, config: Dict[str, Any], prompt_manager: PromptManager):
+    def __init__(self, config: Dict[str, Any], prompt_manager: PromptManager, singing_manager: SingingManager):
+        
         self.logger = get_logger(__name__)
         self.config = config
         self.llm = LLMModule(config["llm_module"], prompt_manager)
         self.max_k_vector_entities = config.get("max_k_vector_entities", 3)
         self.max_k_graph_entities = config.get("max_k_graph_entities", 3)
+        self.singing_manager = singing_manager
 
         # 设置工具列表
         self.tools: List[MyTool] = []
@@ -222,6 +227,65 @@ class MemorySearcher:
         if lyrics:
             return f"《{song_name}》的歌词:\n{lyrics}"
         return f"未找到《{song_name}》的歌词信息。"
+    
+    async def _search_song_by_lyrics(self, knowledge_db: Session, lyrics_snippet: str) -> List[str]:
+        """
+        根据歌词片段搜索歌曲
+        """
+        emoji_pattern = re.compile("["
+                               u"\U0001F600-\U0001F64F"  # emoticons
+                               u"\U0001F300-\U0001F5FF"  # symbols & pictographs
+                               u"\U0001F680-\U0001F6FF"  # transport & map symbols
+                               u"\U0001F1E0-\U0001F1FF"  # flags (iOS)
+                               "]+", flags=re.UNICODE)
+        cleaned_snippet = emoji_pattern.sub(r'', lyrics_snippet)
+        cleaned_snippet = re.sub(r'\s+', ' ', cleaned_snippet).strip()
+        if len(cleaned_snippet) < 8:
+            return [] # 避免过短的歌词片段导致大量无关结果
+        
+        results = []
+        songs = await asyncio.to_thread(search_songs_by_lyrics, knowledge_db, cleaned_snippet)
+        if songs:
+            goal_song = random.choice(songs)
+            results.append(f"歌词片段“{cleaned_snippet}”可能来自歌曲：《{goal_song}》")
+            song_intro = await self._search_song_intro(knowledge_db, goal_song)
+            get_song_lyrics = await self._search_song_lyrics(knowledge_db, goal_song)
+            can_sing = await self.singing_manager.can_i_sing_song_llm(goal_song)
+            results.append(song_intro)
+            results.append(get_song_lyrics)
+            results.append(can_sing)
+            return results
+        
+        # 如果没有结果，尝试折半搜索
+        if len(cleaned_snippet) > 20:
+            mid = len(cleaned_snippet) // 2
+            first_half = cleaned_snippet[:mid]
+            second_half = cleaned_snippet[mid:]
+            songs_first = await asyncio.to_thread(search_songs_by_lyrics, knowledge_db, first_half)
+            songs_second = await asyncio.to_thread(search_songs_by_lyrics, knowledge_db, second_half)
+            common_songs = set(songs_first).intersection(set(songs_second))
+            goal_song = None
+            if common_songs:
+                goal_song = random.choice(list(common_songs))
+            # 如果只有一侧有结果，也返回
+            elif songs_first and not songs_second:
+                goal_song = random.choice(songs_first)
+            elif songs_second and not songs_first:
+                goal_song = random.choice(songs_second)
+
+            if goal_song:
+                results.append(f"歌词片段“{cleaned_snippet}”可能来自歌曲：《{goal_song}》")
+                song_intro = await self._search_song_intro(knowledge_db, goal_song)
+                get_song_lyrics = await self._search_song_lyrics(knowledge_db, goal_song)
+                can_sing = await self.singing_manager.can_i_sing_song_llm(goal_song)
+                results.append(song_intro)
+                results.append(get_song_lyrics)
+                results.append(can_sing)
+                return results
+        
+        # 无结果
+        return [f"“{cleaned_snippet}”未能匹配到任何已知歌曲。"]
+
 
     def set_up_tools(self):
 
@@ -300,6 +364,25 @@ class MemorySearcher:
             additional_required_params=["knowledge_db"]
         )
         self.tool_map[search_song_lyrics.name] = search_song_lyrics
+
+        search_song_by_lyrics = MyTool(
+            name="search_song_by_lyrics",
+            description="输入可能是歌词的句子，尝试根据歌词片段搜索歌曲",
+            tool_func=self._search_song_by_lyrics,
+            tool_interface= ToolFunction(
+                name="search_song_by_lyrics",
+                description="输入可能是歌词的句子，尝试根据歌词片段搜索歌曲",
+                parameters=[
+                    ToolOneParameter(
+                        name="lyrics_snippet",
+                        type="str",
+                        description="歌词片段",
+                    ),
+                ],
+            ),
+            additional_required_params=["knowledge_db"]
+        )
+        self.tool_map[search_song_by_lyrics.name] = search_song_by_lyrics
 
     def tool_to_str(self) -> str:
         tool_descriptions = []
