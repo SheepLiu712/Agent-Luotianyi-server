@@ -11,7 +11,7 @@ class VisionModule:
         # 初始化视觉模型相关组件
         self.vlm_module = VLMModule(config["vlm_module"], prompt_manager)
 
-    def describe_image(self, image_base64: str, **kwargs) -> str:
+    async def describe_image(self, image_base64: str, **kwargs) -> str:
         """
         使用视觉模型描述图像内容
 
@@ -19,5 +19,6 @@ class VisionModule:
         :param kwargs: 其他可选参数
         :return: 图像描述文本
         """
-        response = self.vlm_module.generate_response(image_base64=image_base64, **kwargs)
+        response = await self.vlm_module.generate_response(image_base64=image_base64, **kwargs)
+        self.logger.info(f"Generated image description: {response}")
         return response

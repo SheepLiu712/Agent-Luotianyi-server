@@ -87,7 +87,7 @@ class SiliconFlowAPIInterface(
             self.logger.error(f"初始化硅基流动客户端失败: {e}")
             raise Exception(f"无法初始化硅基流动客户端: {e}")
 
-    async def generate_response(self, prompt: str, image_base64: str,  **kwargs) -> str:
+    async def generate_response(self, prompt: str, image_base64: str, **kwargs) -> str:
         """
         使用 asyncio.to_thread 包装阻塞的同步调用
         """
@@ -108,7 +108,8 @@ class SiliconFlowAPIInterface(
                         top_p=self.top_p,
                         **kwargs,
                     )
-                
+                payload_url = image_base64
+                print("Payload URL:", payload_url[:50] + "...")  # 打印前50个字符以避免日志过长
                 messages = [
                     {
                         "role": "user",
@@ -120,7 +121,7 @@ class SiliconFlowAPIInterface(
                             {
                                 "type":"image_url",
                                 "image_url": {
-                                    "url": f"{image_base64}",
+                                    "url": payload_url,
                                     "detail": "auto"
                                 }
                             }

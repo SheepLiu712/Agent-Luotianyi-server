@@ -528,7 +528,8 @@ def get_history_from_db(db: Session, user_id: str, start: int, end: int) -> List
             timestamp=conv.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
             source=conv.source,
             content=conv.content,
-            type=conv.type
+            type=conv.type,
+            data=conv.meta_data and json.loads(conv.meta_data) or None
         ))
     
     return result

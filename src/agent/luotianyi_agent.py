@@ -26,7 +26,7 @@ from ..memory.memory_manager import MemoryManager
 from ..service.types import ChatResponse
 from ..music.singing_manager import SingingManager
 from ..vision.vision_module import VisionModule
-
+from ..vision.image_process import get_image_bytes_and_base64
 
 def get_available_expression(config_path: str = "config/live2d_interface_config.json") -> List[str]:
     with open(config_path, "r", encoding="utf-8") as f:
@@ -102,9 +102,8 @@ class LuoTianyiAgent:
         """处理用户图片输入，生成回复（流式）。"""
         self.logger.info(f"Agent handling picture input for {user_id}")
         # 将图片通过vlm模块转换为描述文本
-        image_bytes = await image.read()
-        image_base64 = base64.b64encode(image_bytes).decode("utf-8")
-        image_description = await self.vision_module.describe_image(image_base64)  # TODO: 实现视觉模块
+        image_bytes, image_base64 = await get_image_bytes_and_base64(image)
+        image_description = await self.vision_module.describe_image(image_base64)  
         await self.conversation_manager.add_conversation(
             db,
             redis,
@@ -230,8 +229,8 @@ class LuoTianyiAgent:
                     async def fake_tts():
                         return b""
 
-                    tts_task = asyncio.create_task(self.tts_engine.synthesize_speech_with_tone(sent_content, tone))
-                    # tts_task = asyncio.create_task(fake_tts())
+                    # tts_task = asyncio.create_task(self.tts_engine.synthesize_speech_with_tone(sent_content, tone))
+                    tts_task = asyncio.create_task(fake_tts())
                     db_task = asyncio.create_task(
                         self.conversation_manager.add_conversation(
                             db, redis, user_id, ConversationSource.AGENT, sent_content, type=ContextType.TEXT
@@ -352,7 +351,8 @@ class LuoTianyiAgent:
         ret = {"history": [], "start_index": 0}
 
         for item in history_items:
-            if item.type == ContextType.PICTURE and item.data:
+            print(item.type)
+            if item.type == "picture" and item.data:
                 # 图片消息，返回图片路径
                 image_client_path = item.data.get("image_client_path")
                 image_server_path = item.data.get("image_server_path")

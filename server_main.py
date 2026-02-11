@@ -187,7 +187,7 @@ async def picture_chat(
     message_token_valid, user_uuid = account.check_message_token(db, request.username, request.token)
     if not message_token_valid:
         raise HTTPException(status_code=401, detail="消息令牌无效或已过期")
-    
+    print(f"文件名: {request.image.filename}")
     # 定义异步生成器用于流式响应
     async def event_generator():
         # 读取图片数据
