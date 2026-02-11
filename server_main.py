@@ -261,5 +261,5 @@ async def get_image(request: ImageRequest):
         raise HTTPException(status_code=400, detail="获取图片失败，读取文件出错")
 
 if __name__ == "__main__":
-    # uvicorn.run(app, host="0.0.0.0", port=60030)
-    uvicorn.run(app, host="127.0.0.1", port=60030)
+    uvicorn.run(app, host="0.0.0.0", port=60030)
+    # uvicorn.run(app, host="127.0.0.1", port=60030)

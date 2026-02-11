@@ -229,8 +229,8 @@ class LuoTianyiAgent:
                     async def fake_tts():
                         return b""
 
-                    # tts_task = asyncio.create_task(self.tts_engine.synthesize_speech_with_tone(sent_content, tone))
-                    tts_task = asyncio.create_task(fake_tts())
+                    tts_task = asyncio.create_task(self.tts_engine.synthesize_speech_with_tone(sent_content, tone))
+                    # tts_task = asyncio.create_task(fake_tts())
                     db_task = asyncio.create_task(
                         self.conversation_manager.add_conversation(
                             db, redis, user_id, ConversationSource.AGENT, sent_content, type=ContextType.TEXT

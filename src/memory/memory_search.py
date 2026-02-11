@@ -367,11 +367,11 @@ class MemorySearcher:
 
         search_song_by_lyrics = MyTool(
             name="search_song_by_lyrics",
-            description="输入可能是歌词的句子，尝试根据歌词片段搜索歌曲",
+            description="输入可能是歌词的句子，如果确实是歌词，返回歌曲介绍、歌词、现在是否会唱。对可能是歌词的句子，使用这个工具。",
             tool_func=self._search_song_by_lyrics,
             tool_interface= ToolFunction(
                 name="search_song_by_lyrics",
-                description="输入可能是歌词的句子，尝试根据歌词片段搜索歌曲",
+                description="输入可能是歌词的句子，如果确实是歌词，返回歌曲介绍、歌词、现在是否会唱。对可能是歌词的句子，使用这个工具。",
                 parameters=[
                     ToolOneParameter(
                         name="lyrics_snippet",
