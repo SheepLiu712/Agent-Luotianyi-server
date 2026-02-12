@@ -104,6 +104,7 @@ class LuoTianyiAgent:
         # 将图片通过vlm模块转换为描述文本
         image_bytes, image_base64 = await get_image_bytes_and_base64(image)
         image_description = await self.vision_module.describe_image(image_base64)  
+        image_description = f"（用户发送了一张图片）：{image_description}"
         await self.conversation_manager.add_conversation(
             db,
             redis,
@@ -351,7 +352,6 @@ class LuoTianyiAgent:
         ret = {"history": [], "start_index": 0}
 
         for item in history_items:
-            print(item.type)
             if item.type == "picture" and item.data:
                 # 图片消息，返回图片路径
                 image_client_path = item.data.get("image_client_path")

@@ -314,6 +314,16 @@ def check_params(req: dict):
 
     return None
 
+import threading
+tts_pipeline_lock = threading.Lock()
+async def run_tts_sync_in_queue(req: dict):
+    """
+    A wrapper to run tts_handle in an async queue to avoid concurrency issues.
+    """
+    import asyncio
+    loop = asyncio.get_event_loop()
+    with tts_pipeline_lock:
+        return await loop.run_in_executor(None, lambda: asyncio.run(tts_handle(req)))
 
 async def tts_handle(req: dict):
     """
@@ -348,6 +358,7 @@ async def tts_handle(req: dict):
     returns:
         StreamingResponse: audio stream response.
     """
+
 
     streaming_mode = req.get("streaming_mode", False)
     return_fragment = req.get("return_fragment", False)
@@ -449,14 +460,15 @@ async def tts_get_endpoint(
         "sample_steps": int(sample_steps),
         "super_sampling": super_sampling,
     }
-    return await tts_handle(req)
+    return await run_tts_sync_in_queue(req)
 
 
 @APP.post("/tts")
 async def tts_post_endpoint(request: TTS_Request):
     req = request.dict()
-    return await tts_handle(req)
 
+    # return await tts_handle(req)
+    return await run_tts_sync_in_queue(req)
 
 @APP.get("/set_refer_audio")
 async def set_refer_aduio(refer_audio_path: str = None):

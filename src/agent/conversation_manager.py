@@ -160,6 +160,7 @@ class ConversationManager:
         except Exception as e:
             self.logger.error(f"Error in _update_context: {e}")
         finally:
-            db.close()
+            pass
+            # db.close()
 
 

@@ -19,7 +19,7 @@ async def get_image_bytes_and_base64(upload_file: UploadFile):
             img = img.convert("RGB")
         
         # 将图片保存到内存缓冲区，格式设为 JPEG
-        img.save(output_buffer, format="JPEG", quality=85)
+        img.save(output_buffer, format="JPEG", quality=60)
         processed_bytes = output_buffer.getvalue()
         
         # 4. 生成 Base64

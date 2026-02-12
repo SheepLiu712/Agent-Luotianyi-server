@@ -78,7 +78,7 @@
         "vlm_module": {
             "vlm": {
                 "api_type": "siliconflow",
-                "model": "Qwen/Qwen3-VL-30B-A3B-Instruct",
+                "model": "zai-org/GLM-4.6V",
                 "api_key": "$SILICONFLOW_API_KEY",
                 "base_url": "https://api.siliconflow.cn/v1",
                 "temperature": 0.7,
@@ -94,8 +94,8 @@
         "max_file_lines": 1000,
         "recent_history_limit": 100,
         "context_file": "data/memory/context/context.json",
-        "raw_conversation_context_limit": 80,
-        "not_zip_conversation_count": 16,
+        "raw_conversation_context_limit": 240,
+        "not_zip_conversation_count": 20,
         "forget_conversation_days": 10,
         "llm_module": {
             "llm": {
