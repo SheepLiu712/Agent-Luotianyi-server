@@ -261,5 +261,24 @@ async def get_image(request: ImageRequest):
         raise HTTPException(status_code=400, detail="获取图片失败，读取文件出错")
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=60030)
-    # uvicorn.run(app, host="127.0.0.1", port=60030)
+    # 使用 127.0.0.1 配合内网穿透，或使用 0.0.0.0 直接公网访问
+    # 通过 SakuraFrp 等内网穿透服务时，保持 127.0.0.1 即可
+    
+    # HTTPS 配置（用于 SakuraFrp TCP 隧道）
+    cert_file = os.path.join(current_dir, "certs", "cert.pem")
+    key_file = os.path.join(current_dir, "certs", "key.pem")
+    
+    # 检查是否存在 SSL 证书
+    if os.path.exists(cert_file) and os.path.exists(key_file):
+        logger.info("启用 HTTPS 模式")
+        uvicorn.run(
+            app, 
+            host="127.0.0.1", 
+            port=60030,
+            ssl_keyfile=key_file,
+            ssl_certfile=cert_file
+        )
+    else:
+        logger.warning("未找到 SSL 证书，使用 HTTP 模式")
+        logger.warning(f"如需启用 HTTPS，请运行: python scripts/generate_cert.py")
+        uvicorn.run(app, host="127.0.0.1", port=60030)

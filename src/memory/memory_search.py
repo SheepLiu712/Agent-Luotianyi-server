@@ -240,6 +240,7 @@ class MemorySearcher:
                                "]+", flags=re.UNICODE)
         cleaned_snippet = emoji_pattern.sub(r'', lyrics_snippet)
         cleaned_snippet = re.sub(r'\s+', ' ', cleaned_snippet).strip()
+        cleaned_snippet = cleaned_snippet.strip("'\"“”‘’").strip("，。,!?.;:").strip()  # 去除常见标点
         if len(cleaned_snippet) < 8:
             return [] # 避免过短的歌词片段导致大量无关结果
         
