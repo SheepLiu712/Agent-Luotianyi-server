@@ -63,4 +63,6 @@ if __name__ == "__main__":
         finally:
             session.close()
     else:
+        print(f"Adding {args.count} invite codes...")
+        init_sql_db("data\\database", "luotianyi.db")
         add_invite_codes(args.count)

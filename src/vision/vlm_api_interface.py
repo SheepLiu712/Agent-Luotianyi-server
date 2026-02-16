@@ -105,11 +105,11 @@ class SiliconFlowAPIInterface(
                         model=self.model,
                         max_tokens=self.max_tokens,
                         temperature=self.temperature,
-                        top_p=self.top_p,
+                        top_p=self.top_p,  
                         **kwargs,
                     )
                 payload_url = image_base64
-                print("Payload URL:", payload_url[:50] + "...")  # 打印前50个字符以避免日志过长
+                # print("Payload URL:", payload_url[:50] + "...")  # 打印前50个字符以避免日志过长
                 messages = [
                     {
                         "role": "user",

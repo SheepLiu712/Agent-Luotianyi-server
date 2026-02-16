@@ -174,7 +174,7 @@ def add_conversations(db: Session, redis: Redis, user_id: str, conversation_data
                 # Save picture data to file system
                 try:
                     # data/<user_uuid>/<timestamp>.<postfix>
-                    save_dir = os.path.join("data", user_id)
+                    save_dir = os.path.join("data", "images", user_id)
                     os.makedirs(save_dir, exist_ok=True)
                     
                     # File name handling (replace invalid chars for windows/linux)
