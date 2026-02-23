@@ -80,6 +80,7 @@ class MemoryManager:
         user_input: str,
         agent_response_content: List[str],
         history: str,
+        commit: bool = True
     ):
         """
         根据最新的交互内容，生成并写入新的记忆
@@ -96,6 +97,7 @@ class MemoryManager:
             user_input,
             agent_response_content,
             history,
+            commit=commit
         )
 
     async def get_username(self,  db: Session, redis: Redis, user_id: str) -> str:

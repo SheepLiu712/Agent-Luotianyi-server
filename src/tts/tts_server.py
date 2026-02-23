@@ -10,7 +10,7 @@ from ..utils.logger import get_logger
 # Helper function to run server process
 def run_server_silent(config_path, host, port):
     """Wrapper to run the server with stdout/stderr redirected to devnull."""
-    sys.stderr = open(os.devnull, 'w')
+    # sys.stderr = open(os.devnull, 'w')
     # Use standard import inside process to avoid pickling issues
     from src.GPT_SoVITS.api_v2 import run_server
     run_server(config_path, host, port)

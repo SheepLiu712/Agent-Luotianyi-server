@@ -153,22 +153,26 @@ async def chat(request: ChatRequest,
     if not message_token_valid:
         raise HTTPException(status_code=401, detail="消息令牌无效或已过期")
     
-    # 定义异步生成器用于流式响应
-    async def event_generator():
-        # 调用 Agent 的无状态处理方法
-        async for response in agent.handle_user_text_input(
-            user_id=user_uuid,
-            text=request.text,
-            db=db,
-            redis=redis,
-            vector_store=vector_store,
-            knowledge_db=knowledge_db
-        ):
-            # 将 ChatResponse 对象序列化为 JSON
-            data = response.model_dump_json() if hasattr(response, "model_dump_json") else response.json()
-            yield f"data: {data}\n\n"
+    try:
+        # 定义异步生成器用于流式响应
+        async def event_generator():
+            # 调用 Agent 的无状态处理方法
+            async for response in agent.handle_user_text_input(
+                user_id=user_uuid,
+                text=request.text,
+                db=db,
+                redis=redis,
+                vector_store=vector_store,
+                knowledge_db=knowledge_db
+            ):
+                # 将 ChatResponse 对象序列化为 JSON
+                data = response.model_dump_json() if hasattr(response, "model_dump_json") else response.json()
+                yield f"data: {data}\n\n"
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+        return StreamingResponse(event_generator(), media_type="text/event-stream")
+    except Exception as e:
+        logger.error(f"Error in chat endpoint: {e}")
+        raise HTTPException(status_code=500, detail="服务器内部错误")
 
 @app.post("/picture_chat")
 async def picture_chat(
@@ -183,30 +187,31 @@ async def picture_chat(
     图片聊天接口，支持流式响应。用户发送图片和认证信息，服务器返回回复。
     目前仅为占位符，不处理图片内容。
     '''
-    logger.info(f"Server received picture from {request.username}")
+    logger.info(f"Server received image from {request.username}")
     message_token_valid, user_uuid = account.check_message_token(db, request.username, request.token)
     if not message_token_valid:
         raise HTTPException(status_code=401, detail="消息令牌无效或已过期")
-    # print(f"文件名: {request.image.filename}")
-    # 定义异步生成器用于流式响应
-    async def event_generator():
-        # 读取图片数据
-        image_bytes = await request.image.read()
-        
-        # 调用 Agent 的图片处理方法
-        async for response in agent.handle_user_pic_input(
-            user_id=user_uuid,
-            image=request.image,
-            image_client_path=request.image_client_path,
-            db=db,
-            redis=redis,
-            vector_store=vector_store,
-            knowledge_db=knowledge_db
-        ):
-            data = response.model_dump_json() if hasattr(response, "model_dump_json") else response.json()
-            yield f"data: {data}\n\n"
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    try:
+        async def event_generator():
+            
+            # 调用 Agent 的图片处理方法
+            async for response in agent.handle_user_pic_input(
+                user_id=user_uuid,
+                image=request.image,
+                image_client_path=request.image_client_path,
+                db=db,
+                redis=redis,
+                vector_store=vector_store,
+                knowledge_db=knowledge_db
+            ):
+                data = response.model_dump_json() if hasattr(response, "model_dump_json") else response.json()
+                yield f"data: {data}\n\n"
+
+        return StreamingResponse(event_generator(), media_type="text/event-stream")
+    except Exception as e:
+        logger.error(f"Error in picture_chat endpoint: {e}")
+        raise HTTPException(status_code=500, detail="服务器内部错误")
 
 
 @app.get("/history")
@@ -222,33 +227,38 @@ async def get_history(
     return await agent.handle_history_request(user_uuid, request.count, request.end_index, db)
 
 @app.post("/get_image")
-async def get_image(request: ImageRequest):
+async def get_image(request: ImageRequest, db: Session = Depends(database.get_sql_db)):
     '''
     获取图片接口。用户提供图片的服务器路径，服务器返回图片二进制数据。
 
     请求参数：
     - request.username: 用户名
     - request.token: 认证 token
-    - request.image_server_path: 图片在服务器上的存储路径
+    - request.uuid: 图片在服务器上的uuid
     返回值：
     - 成功：图片的二进制数据，Content-Type 根据图片类型设置
     - 失败：HTTP 400 错误，{"detail": "获取图片失败，失败原因"}
     '''
-    logger.info(f"Get image request from {request.username} for {request.image_server_path}")
-    message_token_valid, user_uuid = account.check_message_token(database.get_sql_db(), request.username, request.token)
+    logger.info(f"Get image request from {request.username} for {request.uuid}")
+    message_token_valid, user_uuid = account.check_message_token(db, request.username, request.token)
     if not message_token_valid:
         raise HTTPException(status_code=401, detail="消息令牌无效或已过期")
         
-    if not os.path.isfile(request.image_server_path):
+    # 获取图片服务器路径
+    image_server_path = database.database_service.get_image_server_path(db, user_uuid, request.uuid)
+    if not image_server_path:
+        raise HTTPException(status_code=400, detail="获取图片失败，图片不存在或无权限访问")
+
+    if not os.path.isfile(image_server_path):
         raise HTTPException(status_code=400, detail="获取图片失败，文件不存在")
     
     # 读取图片二进制数据
     try:
-        with open(request.image_server_path, "rb") as f:
+        with open(image_server_path, "rb") as f:
             image_data = f.read()
         
         # 根据文件扩展名设置 Content-Type
-        ext = os.path.splitext(request.image_server_path)[1].lower()
+        ext = os.path.splitext(image_server_path)[1].lower()
         content_type = "image/png"
         if ext in [".jpg", ".jpeg"]:
             content_type = "image/jpeg"
@@ -259,17 +269,43 @@ async def get_image(request: ImageRequest):
     except Exception as e:
         logger.error(f"Error reading image file: {e}")
         raise HTTPException(status_code=400, detail="获取图片失败，读取文件出错")
+    
+@app.post("/update_image_client_path")
+async def update_image_client_path(request: ImageRequest, db: Session = Depends(database.get_sql_db)):
+    '''
+    更新图片的客户端路径。用户提供图片的 UUID 和新的客户端路径，服务器更新数据库记录。
+
+    请求参数：
+    - request.username: 用户名
+    - request.token: 认证 token
+    - request.uuid: 图片对应的对话记录 UUID
+    - request.image_client_path: 图片在客户端的路径
+    返回值：
+    - 成功：{"message": "更新成功"}
+    - 失败：HTTP 400 错误，{"detail": "更新失败，失败原因"}
+    '''
+    logger.info(f"Update image client path request from {request.username} for {request.uuid}")
+    message_token_valid, user_uuid = account.check_message_token(db, request.username, request.token)
+    if not message_token_valid:
+        raise HTTPException(status_code=401, detail="消息令牌无效或已过期")
+    
+    success = database.database_service.update_image_client_path(db, user_uuid, request.uuid, request.image_client_path)
+    if not success:
+        raise HTTPException(status_code=400, detail="更新失败，记录不存在或无权限访问")
+    
+    return {"message": "更新成功"}
 
 if __name__ == "__main__":
     # 使用 127.0.0.1 配合内网穿透，或使用 0.0.0.0 直接公网访问
     # 通过 SakuraFrp 等内网穿透服务时，保持 127.0.0.1 即可
     
+    will_use_https = False
     # HTTPS 配置（用于 SakuraFrp TCP 隧道）
     cert_file = os.path.join(current_dir, "certs", "cert.pem")
     key_file = os.path.join(current_dir, "certs", "key.pem")
     
     # 检查是否存在 SSL 证书
-    if os.path.exists(cert_file) and os.path.exists(key_file):
+    if will_use_https and os.path.exists(cert_file) and os.path.exists(key_file):
         logger.info("启用 HTTPS 模式")
         uvicorn.run(
             app, 
@@ -279,6 +315,9 @@ if __name__ == "__main__":
             ssl_certfile=cert_file
         )
     else:
-        logger.warning("未找到 SSL 证书，使用 HTTP 模式")
-        logger.warning(f"如需启用 HTTPS，请运行: python scripts/generate_cert.py")
+        if will_use_https: # 想要用HTTPS但没有证书
+            logger.warning("未找到 SSL 证书，使用 HTTP 模式")
+            logger.warning(f"如需启用 HTTPS，请运行: python scripts/generate_cert.py")
+        else:
+            logger.info("启用 HTTP 模式")
         uvicorn.run(app, host="127.0.0.1", port=60030)

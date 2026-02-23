@@ -5,6 +5,7 @@ from typing import List, Dict, Any, Optional
 from dataclasses import asdict
 from sqlalchemy.orm import Session
 from redis import Redis
+import uuid
 
 from ..utils.logger import get_logger
 from ..llm.llm_module import LLMModule
@@ -33,9 +34,10 @@ class ConversationManager:
         self.recent_limit = self.config.get("recent_history_limit", 100)
 
     async def add_conversation(self, db: Session, redis: Redis, user_id: str, 
-                             source: ConversationSource, content: str, type: ContextType = ContextType.TEXT, data: Any = None):
+                             source: ConversationSource, content: str, type: ContextType = ContextType.TEXT, data: Any = None) -> str:
         """
-        添加对话到数据库，并检查是否需要更新上下文摘要
+        添加对话到数据库，并检查是否需要更新上下文摘要，返回添加的对话的uuid列表
+
         """
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         item = ConversationItem(
@@ -43,16 +45,45 @@ class ConversationManager:
             source=source.value,
             type=type.value,
             content=content,
-            data=data
+            data=data,
+            uuid=str(uuid.uuid4())
         )
         
         # 1. 写入数据库并更新 Redis Buffer
         # 使用 asyncio.to_thread 运行阻塞的数据库操作
-        await asyncio.to_thread(
+        uuid_list = await asyncio.to_thread(
             database_service.add_conversations, db, redis, user_id, [item]
         )
         # 2. 检查是否需要更新上下文摘要
         await self.check_and_update_context(db, redis, user_id)
+        return uuid_list[0] if uuid_list else "" # 总只有一条记录，所以取第一个返回  
+    
+    def add_conversation_wo_db(self, user_id: str, source: ConversationSource, content: str, type: ContextType = ContextType.TEXT, data: Any = None) -> ConversationItem:
+        """
+        直接创建 ConversationItem 对象，不写入数据库，在后处理时再写入数据库，防止占用过多数据库连接资源
+        """
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        item = ConversationItem(
+            timestamp=timestamp,
+            source=source.value,
+            type=type.value,
+            content=content,
+            data=data,
+            uuid=str(uuid.uuid4())
+        )
+        return item
+    
+    async def add_conversation_list_to_db(self, db: Session, redis: Redis, user_id: str, conversation_list: List[ConversationItem], commit=True) -> List[str]:
+        """
+        将 ConversationItem 列表写入数据库，并检查是否需要更新上下文摘要，返回添加的对话的uuid列表
+
+        """
+        # 1. 写入数据库并更新 Redis Buffer
+        uuid_list = await asyncio.to_thread(
+            database_service.add_conversations, db, redis, user_id, conversation_list, commit=commit
+        )
+        await self.check_and_update_context(db, redis, user_id, commit=commit)
+        return uuid_list
 
     async def get_total_conversation_count(self, db: Session, user_id: str) -> int:
         """
@@ -62,7 +93,7 @@ class ConversationManager:
             database_service.get_total_conversation_count, db, user_id
         )
     
-    async def check_and_update_context(self, db: Session, redis: Redis, user_id: str):
+    async def check_and_update_context(self, db: Session, redis: Redis, user_id: str, commit: bool = True):
         """
         检查是否需要更新上下文 (Context Summary)
         """
@@ -70,7 +101,7 @@ class ConversationManager:
         current_count = await asyncio.to_thread(database_service.get_context_count, db, user_id)
         if current_count > self.raw_conversation_context_limit:
              # 在后台任务中更新摘要，使用新的 DB 会话
-             asyncio.create_task(self._update_context(db, redis, user_id))
+             asyncio.create_task(self._update_context(db, redis, user_id, commit=commit))
 
     async def get_nearset_history(self, db: Session, redis: Redis, user_id: str, n: int) -> List[ConversationItem]:
         """
@@ -118,7 +149,7 @@ class ConversationManager:
             self.logger.error(f"Error in get_context: {e}")
             return ""
 
-    async def _update_context(self, db: Session, redis: Redis, user_id: str):
+    async def _update_context(self, db: Session, redis: Redis, user_id: str, commit: bool = True):
         """
         后台任务：更新上下文摘要
         """
@@ -154,7 +185,7 @@ class ConversationManager:
             new_count = self.not_zip_conversation_count
             await asyncio.to_thread(
                 database_service.update_context_summary,
-                db, redis, user_id, new_summary.strip(), new_count
+                db, redis, user_id, new_summary.strip(), new_count, commit=commit
             )
             
         except Exception as e:

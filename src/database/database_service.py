@@ -139,7 +139,7 @@ def prefill_buffer(db: Session, redis: Redis, user_id: str, types: List[str] = [
         return False
 
 
-def add_conversations(db: Session, redis: Redis, user_id: str, conversation_data: List[ConversationItem]) -> int:
+def add_conversations(db: Session, redis: Redis, user_id: str, conversation_data: List[ConversationItem], commit=True) -> List[str]:
     """
     在数据库中增加一条对话记录，同时user的对话总数all_memory_count加一。context_memory_count加一。
     在 Redis 中相应更新。
@@ -153,13 +153,13 @@ def add_conversations(db: Session, redis: Redis, user_id: str, conversation_data
     :type user_id: str
     :param conversation_data: 多条对话数据
     :type conversation_data: List[ConversationItem]
-    :return: 当前的 context_memory_count
-    :rtype: int
+    :return: 添加的对话的uuid列表
+    :rtype: List[str]
     """
     try:
         user = db.query(User).filter(User.uuid == user_id).first()
         if not user:
-            return 0
+            return []
 
         new_convs = []
         for item in conversation_data:
@@ -170,31 +170,12 @@ def add_conversations(db: Session, redis: Redis, user_id: str, conversation_data
                 ts = datetime.now()
             
             meta_data_str = None
-            if item.type == 'picture' and item.data:
-                # Save picture data to file system
+            if item.type == 'image':
                 try:
-                    # data/<user_uuid>/<timestamp>.<postfix>
-                    save_dir = os.path.join("data", "images", user_id)
-                    os.makedirs(save_dir, exist_ok=True)
-                    
-                    # File name handling (replace invalid chars for windows/linux)
-                    safe_time = item.timestamp.replace(":", "-").replace(" ", "_")
-                    image_client_path = item.data.get("image_client_path", "image.png")
-                    postfix = os.path.splitext(image_client_path)[1] or ".png"
-                    file_path = os.path.join(save_dir, f"{safe_time}.{postfix}")
-                    
-                    # Write image data
-                    image_bytes = item.data.get("image_bytes")
-                    if not isinstance(image_bytes, bytes):
-                        raise ValueError("image_bytes must be bytes")
-
-                    with open(file_path, "wb") as f:
-                        f.write(image_bytes)
-
                     # Store file path in meta_data as JSON
-                    meta_data_str = json.dumps({"image_server_path": file_path, "image_client_path": image_client_path}, ensure_ascii=False)
+                    meta_data_str = json.dumps(item.data, ensure_ascii=False)
                 except Exception as e:
-                    logger.error(f"Failed to save picture for user {user_id}: {e}")
+                    logger.error(f"Failed to serialize meta_data for user {user_id}: {e}")
 
             conv = Conversation(
                 user_id=user_id,
@@ -202,10 +183,12 @@ def add_conversations(db: Session, redis: Redis, user_id: str, conversation_data
                 source=item.source,
                 content=item.content,
                 type=item.type,
-                meta_data=meta_data_str
+                meta_data=meta_data_str,
+                uuid=item.uuid or str(uuid.uuid4()) # 如果外部没有提供 uuid，则生成一个新的
             )
             db.add(conv)
             new_convs.append({
+                "uuid": conv.uuid,
                 "timestamp": item.timestamp,
                 "source": item.source,
                 "content": item.content,
@@ -215,9 +198,9 @@ def add_conversations(db: Session, redis: Redis, user_id: str, conversation_data
         
         user.all_memory_count = (user.all_memory_count or 0) + len(conversation_data)
         user.context_memory_count = (user.context_memory_count or 0) + len(conversation_data)
-        current_context_count = user.context_memory_count
         
-        db.commit()
+        if commit:
+            db.commit()
 
         # Redis update with Optimistic Locking
         redis_key = f"user_context:{user_id}"
@@ -240,14 +223,14 @@ def add_conversations(db: Session, redis: Redis, user_id: str, conversation_data
                 except WatchError:
                     continue
         
-        return current_context_count
+        return [conv["uuid"] for conv in new_convs]
     except Exception as e:
         logger.error(f"add_conversations error: {e}")
         db.rollback()
-        return 0
+        return []
 
 
-def write_knowledge_buffers(db: Session, redis: Redis, user_id: str, knowledge_contents: List[str]) -> None:
+def write_knowledge_buffers(db: Session, redis: Redis, user_id: str, knowledge_contents: List[str], commit: bool = True) -> None:
     """
     更新用户的知识缓存：清空数据库和Redis中该用户旧的知识缓存，并写入新的内容。
 
@@ -279,7 +262,8 @@ def write_knowledge_buffers(db: Session, redis: Redis, user_id: str, knowledge_c
             new_kbs.append(kb)
             redis_update_list.append(content)
         
-        db.commit()
+        if commit:
+            db.commit()
 
         # 2. Redis 操作：直接覆盖
         key = f"user_knowledge:{user_id}"
@@ -292,7 +276,7 @@ def write_knowledge_buffers(db: Session, redis: Redis, user_id: str, knowledge_c
         logger.error(f"write_knowledge_buffers error: {e}")
         db.rollback()
 
-def write_memory_update(db: Session, redis: Redis, user_id: str, memory_update: MemoryUpdateCommand) -> None:
+def write_memory_update(db: Session, redis: Redis, user_id: str, memory_update: MemoryUpdateCommand, commit: bool = True) -> None:
     # 向数据库中添加记忆更新命令记录
     try:
         cmd_to_dict = {
@@ -306,7 +290,8 @@ def write_memory_update(db: Session, redis: Redis, user_id: str, memory_update: 
             created_at=datetime.now()
         )
         db.add(record)
-        db.commit()
+        if commit:
+            db.commit()
 
         # 更新 Redis 中的最近记忆更新缓存
         recent_update_key = f"user_recent_memory_update:{user_id}"
@@ -336,7 +321,7 @@ def write_used_memory_uuid(redis: Redis, user_id:str, used_uuid: set) -> None:
         logger.error(f"write_used_memory_uuid error: {e}")
 
 
-def update_user_nickname(db: Session, redis: Redis, user_id: str, new_nickname: str) -> None:
+def update_user_nickname(db: Session, redis: Redis, user_id: str, new_nickname: str, commit: bool = True) -> None:
     """
     更新用户昵称，同时在 Redis 中相应更新。
 
@@ -353,7 +338,8 @@ def update_user_nickname(db: Session, redis: Redis, user_id: str, new_nickname: 
         user = db.query(User).filter(User.uuid == user_id).first()
         if user:
             user.nickname = new_nickname
-            db.commit()
+            if commit:
+                db.commit()
 
             # 更新 Redis 中的昵称缓存（如果有的话）
             redis_key = f"user_nickname:{user_id}"
@@ -363,7 +349,7 @@ def update_user_nickname(db: Session, redis: Redis, user_id: str, new_nickname: 
         db.rollback()
 
 
-def preserve_knowledge_buffers(db: Session, redis: Redis, user_id: str, knowledge_uuids: List[str]):
+def preserve_knowledge_buffers(db: Session, redis: Redis, user_id: str, knowledge_uuids: List[str], commit: bool = True):
     """
     在数据库中删除知识缓存记录，只保留给定uuid的知识缓存。同时在 Redis 中相应更新。
 
@@ -409,7 +395,7 @@ def preserve_knowledge_buffers(db: Session, redis: Redis, user_id: str, knowledg
         db.rollback()
 
 
-def update_context_summary(db: Session, redis: Redis, user_id: str, new_summary: str, new_context_memory_count: int):
+def update_context_summary(db: Session, redis: Redis, user_id: str, new_summary: str, new_context_memory_count: int, commit: bool = True):
     """
     更新用户的上下文总结 summary，同时重置 context_memory_count。
     在 Redis 中相应更新。
@@ -430,7 +416,8 @@ def update_context_summary(db: Session, redis: Redis, user_id: str, new_summary:
         if user:
             user.context_summary = new_summary
             user.context_memory_count = new_context_memory_count
-            db.commit()
+            if commit:
+                db.commit()
 
             redis_key = f"user_context:{user_id}"
             with redis.pipeline() as pipe:
@@ -529,7 +516,8 @@ def get_history_from_db(db: Session, user_id: str, start: int, end: int) -> List
             source=conv.source,
             content=conv.content,
             type=conv.type,
-            data=conv.meta_data and json.loads(conv.meta_data) or None
+            data=conv.meta_data and json.loads(conv.meta_data) or None,
+            uuid=conv.uuid
         ))
     
     return result
@@ -591,3 +579,40 @@ def get_used_memory_uuid(db:Session, redis: Redis, user_id: str) -> List[str]:
         used_uuid = json.loads(raw_data)
         return used_uuid
     return []
+
+def get_image_server_path(db: Session, user_id: str, uuid: str) -> Optional[str]:
+    conv = db.query(Conversation).filter(
+        Conversation.user_id == user_id,
+        Conversation.uuid == uuid,
+        Conversation.type == "image"
+    ).first()
+
+    if conv and conv.meta_data:
+        try:
+            meta_data = json.loads(conv.meta_data)
+            return meta_data.get("image_server_path")
+        except Exception as e:
+            logger.error(f"Failed to parse meta_data for conversation {uuid} of user {user_id}: {e}")
+            return None
+    return None
+
+def update_image_client_path(db: Session, user_id: str, uuid: str, new_client_path: str) -> bool:
+    conv = db.query(Conversation).filter(
+        Conversation.user_id == user_id,
+        Conversation.uuid == uuid,
+        Conversation.type == "image"
+    ).first()
+
+    if conv and conv.meta_data:
+        try:
+            meta_data = json.loads(conv.meta_data)
+            meta_data["image_client_path"] = new_client_path
+            conv.meta_data = json.dumps(meta_data, ensure_ascii=False)
+            db.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to update image client path for conversation {uuid} of user {user_id}: {e}")
+            db.rollback()
+            return False
+    logger.warning(f"Conversation with uuid {uuid} not found for user {user_id} when updating image client path.")
+    return False

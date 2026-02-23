@@ -4,7 +4,7 @@ class ContextType(str, Enum):
     TEXT = "text"
     SING = "sing"
     CMD = "cmd"
-    PICTURE = "picture"
+    IMAGE = "image"
 
 
 class ConversationSource(str, Enum):

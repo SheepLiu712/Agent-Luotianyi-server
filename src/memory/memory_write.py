@@ -39,6 +39,7 @@ class MemoryWriter:
         user_input: str,
         agent_response_content: List[str],
         history: str,
+        commit: bool = True
     ):
         """
         分析最近的交互，提取有价值的信息存入记忆库。
@@ -60,11 +61,11 @@ class MemoryWriter:
         for funcname, kwargs in update_cmd:
             if "add" in funcname.lower():
                 content = kwargs.get("document", "")
-                await self.v_add(db, redis, vector_store, recent_update, user_id, content)
+                await self.v_add(db, redis, vector_store, recent_update, user_id, content, commit=commit)
 
             elif "username" in funcname.lower():
                 new_name = kwargs.get("new_name", "")
-                await asyncio.to_thread(update_user_nickname, db, redis, user_id, new_name)
+                await asyncio.to_thread(update_user_nickname, db, redis, user_id, new_name, commit=commit)
 
             elif "update" in funcname.lower():
                 uuid_short = kwargs.get("uuid", "")
@@ -81,7 +82,7 @@ class MemoryWriter:
                 content = kwargs.get("new_document", "")
                 if content == "":
                     content = kwargs.get("document", "")
-                await self.v_update(db, redis,  vector_store, recent_update, user_id, uuid_to_update, content)
+                await self.v_update(db, redis,  vector_store, recent_update, user_id, uuid_to_update, content, commit=commit)
 
     async def _extract_knowledge(
         self,
@@ -134,7 +135,7 @@ class MemoryWriter:
         finally:
             return cmd
 
-    async def v_add(self, db: Session, redis: Redis, vector_store: VectorStore, recent_update: List[MemoryUpdateCommand], user_id: str, document: str):
+    async def v_add(self, db: Session, redis: Redis, vector_store: VectorStore, recent_update: List[MemoryUpdateCommand], user_id: str, document: str, commit: bool = True):
         """
         向向量存储中添加新的记忆片段
         """
@@ -143,10 +144,10 @@ class MemoryWriter:
         # logger.debug(f"Successfully added document with UUIDs: {ids} for user {user_id}")
         update_cmd = MemoryUpdateCommand(type="v_add", content=document, uuid=ids[0] if ids else None)
         recent_update.append(update_cmd)
-        await asyncio.to_thread(write_memory_update, db, redis, user_id, update_cmd)
+        await asyncio.to_thread(write_memory_update, db, redis, user_id, update_cmd, commit=commit)
 
 
-    async def v_update(self, db: Session, redis: Redis, vector_store: VectorStore, recent_update: List[MemoryUpdateCommand], user_id: str, uuid: str, new_document: str):
+    async def v_update(self, db: Session, redis: Redis, vector_store: VectorStore, recent_update: List[MemoryUpdateCommand], user_id: str, uuid: str, new_document: str, commit: bool = True):
         """
         更新向量存储中的记忆片段
         """
@@ -161,6 +162,6 @@ class MemoryWriter:
             logger.debug(f"Successfully updated document with UUID: {uuid} for user {user_id}")
             update_cmd = MemoryUpdateCommand(type="v_update", content=new_document, uuid=uuid)
             recent_update.append(update_cmd)
-            await asyncio.to_thread(write_memory_update, db, redis, user_id, update_cmd)
+            await asyncio.to_thread(write_memory_update, db, redis, user_id, update_cmd, commit=commit)
         else:
             logger.warning(f"Failed to update document with UUID: {uuid} for user {user_id}")

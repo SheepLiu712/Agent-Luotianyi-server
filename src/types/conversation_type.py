@@ -32,9 +32,10 @@ def timestamp_to_elapsed_time(timestamp: str) -> str:
 
 @dataclass
 class ConversationItem:
+    uuid: str
     timestamp: str
     source: str
-    type: str # 'text' | 'audio' | 'picture'
+    type: str # 'text' | 'audio' | 'image'
     content: str
     data: Any = None # Optional binary data or extra payload (e.g. image bytes/base64)
     

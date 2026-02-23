@@ -314,56 +314,42 @@ def check_params(req: dict):
 
     return None
 
-import threading
-tts_pipeline_lock = threading.Lock()
-async def run_tts_sync_in_queue(req: dict):
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+
+# 1. 定义一个异步锁
+tts_pipeline_lock = asyncio.Lock()
+# 2. 定义一个专门处理 CPU 密集型任务的线程池（建议大小设为 1，因为你有全局锁）
+tts_executor = ThreadPoolExecutor(max_workers=1)
+
+def sync_tts_core_logic(req: dict):
     """
-    A wrapper to run tts_handle in an async queue to avoid concurrency issues.
+    同步逻辑块：包含所有 CPU 密集型的推理和音频打包操作。
+    这个函数会在 ThreadPoolExecutor 的子线程中运行，不会卡死主线程。
     """
-    import asyncio
-    loop = asyncio.get_event_loop()
-    with tts_pipeline_lock:
-        return await loop.run_in_executor(None, lambda: asyncio.run(tts_handle(req)))
+    # 这里不需要处理 streaming_mode 的 yield，因为外层包装会处理
+    # 我们直接按照非流式逻辑拿取结果
+    media_type = req.get("media_type", "wav")
+    
+    # 模拟原来的推理过程
+    tts_generator = tts_pipeline.run(req)
+    
+    # 拿到推理结果（这里是阻塞点）
+    sr, audio_data = next(tts_generator)
+    
+    # 打包音频
+    audio_bytes = pack_audio(BytesIO(), audio_data, sr, media_type).getvalue()
+    return audio_bytes, sr
 
 async def tts_handle(req: dict):
     """
-    Text to speech handler.
-
-    Args:
-        req (dict):
-            {
-                "text": "",                   # str.(required) text to be synthesized
-                "text_lang: "",               # str.(required) language of the text to be synthesized
-                "ref_audio_path": "",         # str.(required) reference audio path
-                "aux_ref_audio_paths": [],    # list.(optional) auxiliary reference audio paths for multi-speaker synthesis
-                "prompt_text": "",            # str.(optional) prompt text for the reference audio
-                "prompt_lang": "",            # str.(required) language of the prompt text for the reference audio
-                "top_k": 5,                   # int. top k sampling
-                "top_p": 1,                   # float. top p sampling
-                "temperature": 1,             # float. temperature for sampling
-                "text_split_method": "cut5",  # str. text split method, see text_segmentation_method.py for details.
-                "batch_size": 1,              # int. batch size for inference
-                "batch_threshold": 0.75,      # float. threshold for batch splitting.
-                "split_bucket: True,          # bool. whether to split the batch into multiple buckets.
-                "speed_factor":1.0,           # float. control the speed of the synthesized audio.
-                "fragment_interval":0.3,      # float. to control the interval of the audio fragment.
-                "seed": -1,                   # int. random seed for reproducibility.
-                "media_type": "wav",          # str. media type of the output audio, support "wav", "raw", "ogg", "aac".
-                "streaming_mode": False,      # bool. whether to return a streaming response.
-                "parallel_infer": True,       # bool.(optional) whether to use parallel inference.
-                "repetition_penalty": 1.35    # float.(optional) repetition penalty for T2S model.
-                "sample_steps": 32,           # int. number of sampling steps for VITS model V3.
-                "super_sampling": False,       # bool. whether to use super-sampling for audio when using VITS model V3.
-            }
-    returns:
-        StreamingResponse: audio stream response.
+    主入口函数：负责参数检查、异步锁排队和调度任务。
     """
-
-
     streaming_mode = req.get("streaming_mode", False)
     return_fragment = req.get("return_fragment", False)
     media_type = req.get("media_type", "wav")
 
+    # 参数检查（保持原有逻辑）
     check_res = check_params(req)
     if check_res is not None:
         return check_res
@@ -371,37 +357,89 @@ async def tts_handle(req: dict):
     if streaming_mode or return_fragment:
         req["return_fragment"] = True
 
-    try:
-        tts_generator = tts_pipeline.run(req)
-
-        if streaming_mode:
-
-            def streaming_generator(tts_generator: Generator, media_type: str):
-                if_frist_chunk = True
-                for sr, chunk in tts_generator:
-                    if if_frist_chunk and media_type == "wav":
-                        yield wave_header_chunk(sample_rate=sr)
-                        media_type = "raw"
-                        if_frist_chunk = False
-                    yield pack_audio(BytesIO(), chunk, sr, media_type).getvalue()
-
-            # _media_type = f"audio/{media_type}" if not (streaming_mode and media_type in ["wav", "raw"]) else f"audio/x-{media_type}"
-            return StreamingResponse(
-                streaming_generator(
-                    tts_generator,
-                    media_type,
-                ),
-                media_type=f"audio/{media_type}",
+    # 使用 asyncio.Lock 异步排队
+    # 当一个请求在执行时，其他请求会在这一行非阻塞地等待
+    async with tts_pipeline_lock:
+        try:
+            loop = asyncio.get_event_loop()
+            
+            # 将 CPU 密集的推理逻辑丢给线程池
+            # 这样主线程（Event Loop）在等待时可以去处理其他人的网络请求
+            audio_data, sr = await loop.run_in_executor(
+                tts_executor, 
+                sync_tts_core_logic, 
+                req
             )
 
-        else:
-            sr, audio_data = next(tts_generator)
-            audio_data = pack_audio(BytesIO(), audio_data, sr, media_type).getvalue()
-            return Response(audio_data, media_type=f"audio/{media_type}")
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return JSONResponse(status_code=400, content={"message": "tts failed", "Exception": str(e)})
+            # 兼容原有的返回结构
+            if streaming_mode:
+                # 即使推理是整体完成的，我们也可以模拟流式返回给前端
+                async def async_streaming_generator():
+                    if media_type == "wav":
+                        yield wave_header_chunk(sample_rate=sr)
+                    yield audio_data
+
+                return StreamingResponse(
+                    async_streaming_generator(),
+                    media_type=f"audio/{media_type}"
+                )
+            else:
+                return Response(
+                    content=audio_data, 
+                    media_type=f"audio/{media_type}"
+                )
+
+        except Exception as e:
+            traceback.print_exc()
+            return JSONResponse(
+                status_code=400, 
+                content={"message": "tts failed", "Exception": str(e)}
+            )
+
+
+# async def tts_handle(req: dict):
+#     streaming_mode = req.get("streaming_mode", False)
+#     return_fragment = req.get("return_fragment", False)
+#     media_type = req.get("media_type", "wav")
+
+#     check_res = check_params(req)
+#     if check_res is not None:
+#         return check_res
+
+#     if streaming_mode or return_fragment:
+#         req["return_fragment"] = True
+
+#     try:
+#         tts_generator = tts_pipeline.run(req)
+
+#         if streaming_mode:
+
+#             def streaming_generator(tts_generator: Generator, media_type: str):
+#                 if_frist_chunk = True
+#                 for sr, chunk in tts_generator:
+#                     if if_frist_chunk and media_type == "wav":
+#                         yield wave_header_chunk(sample_rate=sr)
+#                         media_type = "raw"
+#                         if_frist_chunk = False
+#                     yield pack_audio(BytesIO(), chunk, sr, media_type).getvalue()
+
+#             # _media_type = f"audio/{media_type}" if not (streaming_mode and media_type in ["wav", "raw"]) else f"audio/x-{media_type}"
+#             return StreamingResponse(
+#                 streaming_generator(
+#                     tts_generator,
+#                     media_type,
+#                 ),
+#                 media_type=f"audio/{media_type}",
+#             )
+
+#         else:
+#             sr, audio_data = next(tts_generator)
+#             audio_data = pack_audio(BytesIO(), audio_data, sr, media_type).getvalue()
+#             return Response(audio_data, media_type=f"audio/{media_type}")
+#     except Exception as e:
+#         import traceback
+#         traceback.print_exc()
+#         return JSONResponse(status_code=400, content={"message": "tts failed", "Exception": str(e)})
 
 
 @APP.get("/control")
@@ -460,7 +498,7 @@ async def tts_get_endpoint(
         "sample_steps": int(sample_steps),
         "super_sampling": super_sampling,
     }
-    return await run_tts_sync_in_queue(req)
+    return await tts_handle(req)
 
 
 @APP.post("/tts")
@@ -468,7 +506,7 @@ async def tts_post_endpoint(request: TTS_Request):
     req = request.dict()
 
     # return await tts_handle(req)
-    return await run_tts_sync_in_queue(req)
+    return await tts_handle(req)
 
 @APP.get("/set_refer_audio")
 async def set_refer_aduio(refer_audio_path: str = None):

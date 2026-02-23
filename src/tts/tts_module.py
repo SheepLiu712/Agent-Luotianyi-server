@@ -134,7 +134,7 @@ class TTSModule:
         try:
             # Use asyncio.to_thread to make the blocking requests.post non-blocking
             def _do_request():
-                return requests.post(f"{self.api_url}/tts", json=payload, timeout=60)
+                return requests.post(f"{self.api_url}/tts", json=payload, timeout=600)
 
             response = await asyncio.to_thread(_do_request)
             

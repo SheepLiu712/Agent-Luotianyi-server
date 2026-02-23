@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, String, Integer, DateTime, Boolean, ForeignKey, Text, Engine
+from sqlalchemy import create_engine, Column, String, Integer, DateTime, Boolean, ForeignKey, Text, Engine, event
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from datetime import datetime
 import uuid
@@ -46,7 +46,7 @@ class Conversation(Base):
     user_id = Column(String, ForeignKey("users.uuid"), nullable=False)
     timestamp = Column(DateTime, default=datetime.now)
     source = Column(String, nullable=False) # 'user' or 'agent'
-    type = Column(String, nullable=False) # 'text' or 'audio'
+    type = Column(String, nullable=False) # 'text' or 'audio' or 'image'
     content = Column(Text, nullable=False)
     meta_data = Column(Text, nullable=True)
     
@@ -98,6 +98,19 @@ def init_sql_db(db_folder: str = None, db_file: str = None):
         os.makedirs(db_folder, exist_ok=True)
 
     engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+
+    # 2. 注册监听器：在每个连接建立时执行 WAL 开启指令
+    @event.listens_for(engine, "connect")
+    def set_sqlite_pragma(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        # 开启 WAL 模式
+        cursor.execute("PRAGMA journal_mode=WAL")
+        # 建议同时开启：同步模式设为 NORMAL，能显著提升写入速度且保证断电安全
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        # 建议同时设置：忙等待超时时间（毫秒），防止并发写入时立刻报错
+        cursor.execute("PRAGMA busy_timeout=5000")
+        cursor.close()
+
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     Base.metadata.create_all(bind=engine)
 

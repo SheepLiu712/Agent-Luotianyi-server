@@ -191,19 +191,21 @@ class MemorySearcher:
         finally:
             return results
 
-    async def _vector_search(self,vector_store: VectorStore, used_uuid: set, user_id: str, query: str) -> List[str]:
+    async def _vector_search(self,vector_store: VectorStore, used_uuid: set, user_id: str, query: List[str]) -> List[str]:
         """
         基于向量检索的记忆搜索
         """
-        results = await vector_store.search(user_id, query, k=self.max_k_vector_entities) # 这个一定要异步，因为需要网络请求嵌入
         combined_result = []
-        for doc, score in results:
-            if score < 0.50:
-                break
-            if doc.id not in used_uuid:
-                used_uuid.add(doc.id)
-                timestamp = doc.metadata.get("timestamp", "unknown time")
-                combined_result.append(f"在{timestamp}, {doc.get_content()}")
+        for q in query:
+            results = await vector_store.search(user_id, q, k=self.max_k_vector_entities) # 这个一定要异步，因为需要网络请求嵌入
+
+            for doc, score in results:
+                if score < 0.46:
+                    break
+                if doc.id not in used_uuid:
+                    used_uuid.add(doc.id)
+                    timestamp = doc.metadata.get("timestamp", "unknown time")
+                    combined_result.append(f"在{timestamp}, {doc.get_content()}")
         return combined_result
 
     async def _search_song_intro(self, knowledge_db: Session, song_name: str) -> str:
@@ -319,8 +321,8 @@ class MemorySearcher:
                 parameters=[
                     ToolOneParameter(
                         name="query",
-                        type="str",
-                        description="用于检索的查询语句",
+                        type="List[str]",
+                        description="用于检索的查询语句列表，每一个元素是一次独立的查询",
                     ),
                 ],
             ),

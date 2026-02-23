@@ -12,6 +12,7 @@ class HistoryRequest(BaseModel):
     end_index: int = -1
 
 class ChatResponse(BaseModel):
+    uuid: str
     text: str
     audio: str | None = None
     expression: str | None = None
@@ -49,4 +50,5 @@ class PictureChatRequest:
 class ImageRequest(BaseModel):
     username: str
     token: str
-    image_server_path: str
+    uuid: str
+    image_client_path: str = None
